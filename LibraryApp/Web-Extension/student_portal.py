@@ -550,6 +550,18 @@ CSRF_EXCLUDED_ENDPOINTS = [
 
 
 @app.before_request
+def restrict_admin_endpoints():
+    """Restrict admin endpoints to localhost"""
+    if request.path.startswith('/api/admin/'):
+        remote_addr = request.remote_addr or ''
+        # Allow 127.0.0.1, ::1, or IPv4-mapped IPv6 like ::ffff:127.0.0.1
+        if remote_addr not in ['127.0.0.1', '::1'] and not remote_addr.endswith(':127.0.0.1'):
+            return jsonify({
+                'status': 'error',
+                'message': 'Forbidden: Admin endpoints are restricted to localhost.'
+            }), 403
+
+@app.before_request
 def csrf_protect():
     """Validate CSRF token for state-changing requests"""
     # Skip for safe methods (GET, HEAD, OPTIONS)
