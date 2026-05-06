@@ -550,6 +550,18 @@ CSRF_EXCLUDED_ENDPOINTS = [
 
 
 @app.before_request
+def enforce_local_admin():
+    """Restrict /api/admin/ endpoints to local desktop application only."""
+    if request.path.startswith('/api/admin/'):
+        # Check actual connection IP, explicitly ignoring X-Forwarded-For
+        if request.remote_addr not in ('127.0.0.1', '::1'):
+            # Security issue: remote IP accessing desktop-only admin endpoint
+            return jsonify({
+                'status': 'error',
+                'message': 'Admin endpoints are restricted to the local machine.'
+            }), 403
+
+@app.before_request
 def csrf_protect():
     """Validate CSRF token for state-changing requests"""
     # Skip for safe methods (GET, HEAD, OPTIONS)
