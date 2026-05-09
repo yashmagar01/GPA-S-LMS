@@ -1,0 +1,4 @@
+## 2025-02-27 - Restricting local desktop app endpoints from network access
+**Vulnerability:** The Flask student portal exposed `/api/admin/` endpoints used by the desktop app on a Waitress server listening on `0.0.0.0` (all interfaces), making them potentially accessible over the network.
+**Learning:** For a single-server architecture where administrative endpoints are only meant to be consumed by a local process (like a Tkinter desktop app connecting to a Waitress-served Flask API on the same machine), these endpoints must explicitly check for local origins.
+**Prevention:** Implement an `@app.before_request` middleware to ensure all paths prefixed with administrative scopes (e.g. `/api/admin/`) strictly match `request.remote_addr` against localhost IPs ('127.0.0.1', '::1', 'localhost'), ignoring IP spoofing risks via `X-Forwarded-For`.
