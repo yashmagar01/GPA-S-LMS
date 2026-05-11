@@ -550,6 +550,18 @@ CSRF_EXCLUDED_ENDPOINTS = [
 
 
 @app.before_request
+def enforce_admin_local_access():
+    """Ensure /api/admin/ endpoints are only accessible from localhost."""
+    if request.path.startswith('/api/admin/'):
+        # Only allow connections originating from local IP.
+        # Ignore X-Forwarded-For to prevent IP spoofing since Waitress may not strip it.
+        if request.remote_addr not in ['127.0.0.1', '::1']:
+            return jsonify({
+                'status': 'error',
+                'message': 'Forbidden: Admin endpoints are restricted to local access.'
+            }), 403
+
+@app.before_request
 def csrf_protect():
     """Validate CSRF token for state-changing requests"""
     # Skip for safe methods (GET, HEAD, OPTIONS)
