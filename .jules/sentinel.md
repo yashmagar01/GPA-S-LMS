@@ -1,0 +1,4 @@
+## 2024-05-12 - [Critical] Missing Authorization on Admin Endpoints
+**Vulnerability:** The Flask application's `/api/admin/` endpoints were accessible without any authentication or authorization. An attacker could access sensitive functionality like resetting user passwords or approving requests.
+**Learning:** The endpoints were meant for a Desktop app running locally, but Waitress by default bounds to all network interfaces (`0.0.0.0`), exposing them externally. Even worse, the CSRF protection logic was explicitly ignoring those paths.
+**Prevention:** Always enforce access control rules on endpoints even if they are only meant for internal or local communication. We solved this by using `@app.before_request` hook to enforce IP check (127.0.0.1 or ::1) while disregarding `X-Forwarded-For` to prevent IP spoofing attacks.
