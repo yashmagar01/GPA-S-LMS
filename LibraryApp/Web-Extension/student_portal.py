@@ -549,6 +549,15 @@ CSRF_EXCLUDED_ENDPOINTS = [
 ]
 
 
+
+@app.before_request
+def enforce_admin_local_access():
+    """Ensure /api/admin/ endpoints are only accessed locally."""
+    if request.path.startswith('/api/admin/'):
+        # Only allow 127.0.0.1 and ::1. Ignore X-Forwarded-For to prevent spoofing.
+        if request.remote_addr not in ['127.0.0.1', '::1']:
+            return jsonify({'status': 'error', 'message': 'Forbidden: Local access only'}), 403
+
 @app.before_request
 def csrf_protect():
     """Validate CSRF token for state-changing requests"""
