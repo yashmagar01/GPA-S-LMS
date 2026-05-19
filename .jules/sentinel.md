@@ -1,0 +1,5 @@
+
+## 2024-05-24 - [Unauthenticated Admin Endpoints Exposure]
+**Vulnerability:** Admin endpoints under `/api/admin/` in the Flask Student Portal lacked authentication and authorization checks, leaving them exposed to external network traffic. Although they were designed for local use via the desktop app, they were publicly accessible if the server was listening on 0.0.0.0.
+**Learning:** Even internal API endpoints intended exclusively for local desktop app communication must explicitly enforce access restrictions. Relying on obscurity or undocumented knowledge about "local only" endpoints without enforcing it programmatically leaves the system vulnerable to unauthorized access, potentially allowing attackers to modify application settings, view statistics, or manipulate requests.
+**Prevention:** Implement a global request hook (`@app.before_request`) or a strict middleware that explicitly verifies `request.remote_addr` for localhost IPs (`127.0.0.1`, `::1`) before granting access to internal endpoints. Alternatively, use robust authentication tokens.
