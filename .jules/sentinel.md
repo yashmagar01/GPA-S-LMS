@@ -1,0 +1,4 @@
+## 2024-05-24 - [CRITICAL] Admin Endpoints Publicly Exposed via Missing Localhost Enforcement
+**Vulnerability:** Admin endpoints (`/api/admin/*`) in `student_portal.py` have no authentication checks and skip CSRF protection. Waitress is configured to listen on `0.0.0.0`, exposing these endpoints to any user on the network.
+**Learning:** Even if a desktop app communicates over localhost, binding the API server to `0.0.0.0` (for student portal access) exposes internal administrative routes globally. Internal administrative routes on a shared server must explicitly enforce access controls.
+**Prevention:** Implement an `@app.before_request` hook (`enforce_admin_local_access`) to verify `request.remote_addr` is a loopback address (`127.0.0.1` or `::1`) before allowing access to `/api/admin/*` paths.
