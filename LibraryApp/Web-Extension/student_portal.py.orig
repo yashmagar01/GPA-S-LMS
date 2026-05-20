@@ -236,7 +236,7 @@ os.makedirs(REGISTRATION_PHOTO_FOLDER, exist_ok=True)
 # --- Bootstrapping for PyInstaller ---
 if getattr(sys, 'frozen', False):
     import shutil
-    
+
     # 1. Bootstrap portal.db
     portal_db_path = os.path.join(BASE_DIR, 'portal.db')
     if not os.path.exists(portal_db_path):
@@ -355,13 +355,13 @@ def get_or_create_secret_key():
     env_key = os.environ.get('FLASK_SECRET_KEY') or os.environ.get('SECRET_KEY')
     if env_key:
         return env_key
-    
+
     # 2. Check for persisted key file
     key_file = os.path.join(BASE_DIR, '.secret_key')
     if os.path.exists(key_file):
         with open(key_file, 'r') as f:
             return f.read().strip()
-    
+
     # 3. Generate new key and persist it
     import secrets
     new_key = secrets.token_hex(32)
@@ -453,7 +453,7 @@ class RateLimiter:
     def __init__(self):
         self.requests = defaultdict(list)  # {key: [timestamps]}
         self.lock = threading.Lock()
-        
+
         # Rate limit configurations: {endpoint_pattern: (max_requests, window_seconds)}
         self.limits = {
             '/api/login': (5, 60),           # 5 attempts per minute
@@ -461,43 +461,43 @@ class RateLimiter:
             '/api/change_password': (3, 60),  # 3 attempts per minute
             'default': (60, 60)               # 60 requests per minute (default)
         }
-    
+
     def _get_client_key(self, endpoint):
         """Generate unique key for client + endpoint"""
         # Use IP address as identifier
         client_ip = request.headers.get('X-Forwarded-For', request.remote_addr) or 'unknown'
         return f"{client_ip}:{endpoint}"
-    
+
     def _cleanup_old_requests(self, key, window_seconds):
         """Remove requests outside the time window"""
         cutoff = time.time() - window_seconds
         self.requests[key] = [ts for ts in self.requests[key] if ts > cutoff]
-    
+
     def is_rate_limited(self, endpoint):
         """Check if request should be rate limited"""
         # Get limit config for endpoint
         limit_config = self.limits.get(endpoint, self.limits['default'])
         max_requests, window_seconds = limit_config
-        
+
         key = self._get_client_key(endpoint)
         current_time = time.time()
-        
+
         with self.lock:
             self._cleanup_old_requests(key, window_seconds)
-            
+
             if len(self.requests[key]) >= max_requests:
                 return True, max_requests, window_seconds
-            
+
             # Record this request
             self.requests[key].append(current_time)
             return False, max_requests, window_seconds
-    
+
     def get_retry_after(self, endpoint):
         """Get seconds until rate limit resets"""
         limit_config = self.limits.get(endpoint, self.limits['default'])
         _, window_seconds = limit_config
         key = self._get_client_key(endpoint)
-        
+
         if self.requests[key]:
             oldest = min(self.requests[key])
             return int(window_seconds - (time.time() - oldest)) + 1
@@ -512,7 +512,7 @@ def rate_limit(f):
     def decorated_function(*args, **kwargs):
         endpoint = request.path
         is_limited, max_req, window = rate_limiter.is_rate_limited(endpoint)
-        
+
         if is_limited:
             retry_after = rate_limiter.get_retry_after(endpoint)
             response = jsonify({
@@ -523,7 +523,7 @@ def rate_limit(f):
             response.status_code = 429
             response.headers['Retry-After'] = str(retry_after)
             return response
-        
+
         return f(*args, **kwargs)
     return decorated_function
 
@@ -555,27 +555,27 @@ def csrf_protect():
     # Skip for safe methods (GET, HEAD, OPTIONS)
     if request.method in ['GET', 'HEAD', 'OPTIONS']:
         return
-    
+
     # Skip for excluded endpoints
     if request.path in CSRF_EXCLUDED_ENDPOINTS:
         return
-    
+
     # Skip for admin endpoints (desktop app access only)
     if request.path.startswith('/api/admin/'):
         return
-    
+
     # Skip for static files
     if request.path.startswith('/static') or request.path.startswith('/assets'):
         return
-    
+
     # Get token from header and cookie
     header_token = request.headers.get('X-CSRF-Token')
     cookie_token = request.cookies.get('csrf_token')
-    
+
     # Validate both exist and match
     if not header_token or not cookie_token or header_token != cookie_token:
         return jsonify({
-            'status': 'error', 
+            'status': 'error',
             'message': 'CSRF token missing or invalid. Please refresh the page.'
         }), 403
 
@@ -587,28 +587,14 @@ def set_csrf_cookie(response):
         # httponly=False so JavaScript can read it
         # samesite='Lax' for balance of security and usability
         response.set_cookie(
-            'csrf_token', 
-            token, 
-            httponly=False, 
+            'csrf_token',
+            token,
+            httponly=False,
             samesite='Lax',
             max_age=86400  # 24 hours
         )
     return response
 
-@app.before_request
-def enforce_admin_local_access():
-    """
-    Security Middleware: Restrict /api/admin/ endpoints to localhost only.
-    The Tkinter desktop app communicates with these endpoints locally.
-    Since Waitress serves on 0.0.0.0, this prevents external access to admin routes.
-    """
-    if request.path.startswith('/api/admin/'):
-        client_ip = request.remote_addr
-        if client_ip not in ['127.0.0.1', '::1', 'localhost']:
-            return jsonify({
-                'status': 'error',
-                'message': 'Admin endpoints are restricted to local access only.'
-            }), 403
 
 # --- Observability: Logging Middleware (serialized via queue) ---
 _log_queue = queue.Queue()
@@ -628,7 +614,7 @@ def _log_writer_loop():
                     break
         except queue.Empty:
             continue
-        
+
         if batch:
             try:
                 conn = get_portal_db()
@@ -650,12 +636,12 @@ def log_request(response):
     """Log every request to the access_logs table (queued, non-blocking)"""
     if request.path.startswith('/static') or request.path.startswith('/assets'):
         return response
-    
+
     try:
         _log_queue.put_nowait((request.path, request.method, response.status_code))
     except queue.Full:
         pass
-        
+
     return response
 
 
@@ -895,10 +881,10 @@ def get_db_connection(local_db_name):
     Desktop: always SQLite for speed; SyncManager syncs to Supabase in background.
     Render: always Postgres since the server is co-located with Supabase."""
     global _portal_pg_pool, _portal_pool_failed
-    
+
     database_url = _normalize_database_url(os.getenv('DATABASE_URL'))
     is_server_deploy = os.getenv('RENDER') or os.getenv('IS_SERVER')
-    
+
     # On Render (cloud deployment), use Postgres directly — low latency, no local state needed
     if is_server_deploy and database_url and POSTGRES_AVAILABLE:
         # Initialize pool once
@@ -907,7 +893,7 @@ def get_db_connection(local_db_name):
                 if _portal_pg_pool is None and not _portal_pool_failed:
                     # Disabled ThreadedConnectionPool to prevent SSL drops with Supabase pooler
                     _portal_pool_failed = True
-        
+
         if _portal_pg_pool:
             try:
                 conn = _portal_pg_pool.getconn()
@@ -915,7 +901,7 @@ def get_db_connection(local_db_name):
                 return PostgresConnectionWrapper(conn, pool=_portal_pg_pool)
             except Exception:
                 pass
-        
+
         try:
             conn = psycopg2.connect(database_url, connect_timeout=10)
             return PostgresConnectionWrapper(conn)
@@ -924,13 +910,13 @@ def get_db_connection(local_db_name):
             print(msg)
             # On server we must not silently serve stale packaged SQLite data.
             raise RuntimeError(msg)
-    
+
     # Desktop / local: always use SQLite for instant response
     if local_db_name == 'library.db':
         db_path = os.path.join(os.path.dirname(BASE_DIR), 'library.db')
     else:
         db_path = os.path.join(BASE_DIR, 'portal.db')
-        
+
     conn = sqlite3.connect(db_path, timeout=10)
     conn.row_factory = sqlite3.Row
     # Enable WAL mode for concurrent read/write access (prevents "database is locked")
@@ -1023,12 +1009,12 @@ def get_portal_db():
 def create_table_safe(cursor, table_name, pg_sql, sqlite_sql):
     """Helper to create tables with backend-specific syntax"""
     database_url = os.getenv('DATABASE_URL')
-    
+
     # Check if the cursor is a Postgres cursor (it's wrapped in our PostgresCursorWrapper or native)
     is_postgres = False
     if hasattr(cursor, 'cursor') and 'psycopg2' in str(type(cursor.cursor)):
         is_postgres = True
-        
+
     if database_url and POSTGRES_AVAILABLE and is_postgres:
         try:
             cursor.execute(pg_sql)
@@ -1041,7 +1027,7 @@ def init_portal_db():
     """Initialize the Sandbox DB for Requests and Notes"""
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     # Requests Table
     create_table_safe(cursor, 'requests', '''
         CREATE TABLE IF NOT EXISTS requests (
@@ -1062,7 +1048,7 @@ def init_portal_db():
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
+
     # Auth Table
     create_table_safe(cursor, 'student_auth', '''
         CREATE TABLE IF NOT EXISTS student_auth (
@@ -1098,7 +1084,7 @@ def init_portal_db():
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
+
     # Deletion Requests
     create_table_safe(cursor, 'deletion_requests', '''
         CREATE TABLE IF NOT EXISTS deletion_requests (
@@ -1283,7 +1269,7 @@ def init_portal_db():
         )
     ''')
 
-    
+
     conn.commit()
     conn.close()
 
@@ -1299,13 +1285,13 @@ def send_email_bg(recipient, subject, body):
     """Background task to send email using shared settings"""
     if not recipient:
         return
-        
+
     try:
         # Path to email_settings.json (One level up from Web-Extension)
         # student_portal.py is in LibraryApp/Web-Extension
         # email_settings.json is in LibraryApp/
         settings_path = os.path.join(os.path.dirname(BASE_DIR), 'email_settings.json')
-        
+
         if not os.path.exists(settings_path):
             print(f"Email settings not found at {settings_path}")
             return
@@ -1320,10 +1306,10 @@ def send_email_bg(recipient, subject, body):
         msg['From'] = settings['sender_email']
         msg['To'] = recipient
         msg['Subject'] = subject
-        
+
         # Attach plain text version (fallback)
         msg.attach(MIMEText("Please enable HTML to view this email.", 'plain'))
-        
+
         # Attach HTML version if body looks like HTML, otherwise plain
         if body.strip().startswith('<html') or body.strip().startswith('<!DOCTYPE html'):
              msg.attach(MIMEText(body, 'html'))
@@ -1337,7 +1323,7 @@ def send_email_bg(recipient, subject, body):
         server.send_message(msg)
         server.quit()
         print(f"Email sent to {recipient}")
-        
+
     except Exception as e:
         print(f"Failed to send email: {e}")
 
@@ -1350,9 +1336,9 @@ def trigger_notification_email(enrollment_no, subject, body):
         cursor_portal.execute("SELECT email FROM user_settings WHERE enrollment_no = ?", (enrollment_no,))
         setting = cursor_portal.fetchone()
         conn_portal.close()
-        
+
         email = setting['email'] if setting and setting['email'] else None
-        
+
         # 2. If no custom email, check College Records (Library DB)
         if not email:
             conn_lib = get_library_db()
@@ -1361,10 +1347,10 @@ def trigger_notification_email(enrollment_no, subject, body):
             student = cursor_lib.fetchone()
             conn_lib.close()
             email = student['email'] if student else None
-            
+
         if email:
             threading.Thread(target=send_email_bg, args=(email, subject, body)).start()
-            
+
     except Exception as e:
         print(f"Error triggering email: {e}")
 
@@ -1375,21 +1361,21 @@ def request_deletion():
     data = request.json
     password = data.get('password', '').strip()
     reason = data.get('reason', 'User requested deletion via Student Portal')
-    
+
     # 1. Verify Session
     if 'student_id' not in session:
         return jsonify({"status": "error", "message": "Unauthorized"}), 401
-        
+
     student_id = session['student_id']
-    
+
     conn = get_portal_db()
     c = conn.cursor()
-    
+
     # 2. Verify Password (Re-authentication)
     # Check student_auth first
     c.execute("SELECT password FROM student_auth WHERE enrollment_no = ?", (student_id,))
     auth_record = c.fetchone()
-    
+
     is_valid = False
     if auth_record:
         stored_pw = auth_record['password']
@@ -1405,18 +1391,18 @@ def request_deletion():
         # No auth record - check against enrollment_no as default password
         if password == student_id:
             is_valid = True
-            
+
     if not is_valid:
         conn.close()
         return jsonify({"status": "error", "message": "Incorrect password"}), 403
-        
+
     # 3. Check for existing pending request
     c.execute("SELECT id FROM deletion_requests WHERE student_id = ? AND status = 'pending'", (student_id,))
     existing = c.fetchone()
     if existing:
         conn.close()
         return jsonify({"status": "error", "message": "A deletion request is already pending."}), 400
-        
+
     # 4. Create Request
     try:
         c.execute("INSERT INTO deletion_requests (student_id, reason) VALUES (?, ?)", (student_id, reason))
@@ -1434,10 +1420,10 @@ def api_login():
         data = request.json
         enrollment = data.get('enrollment_no', '').strip()
         password = data.get('password', '').strip()
-        
+
         if not enrollment:
             return jsonify({'status': 'error', 'message': 'Enrollment number required'}), 400
-        
+
         # 1. Check if student exists in MAIN DB (Read-Only)
         conn_lib = get_library_db()
         cursor_lib = conn_lib.cursor()
@@ -1457,25 +1443,25 @@ def api_login():
                 conn_lib.close()
                 raise
         conn_lib.close()
-        
+
         if not student:
             return jsonify({'status': 'error', 'message': 'Student not found'}), 401
-        
+
         # 2. Check Auth Status in PORTAL DB (Shadow Auth)
         conn_portal = get_portal_db()
         cursor_p = conn_portal.cursor()
         cursor_p.execute("SELECT * FROM student_auth WHERE enrollment_no = ?", (enrollment,))
         auth_record = cursor_p.fetchone()
-        
+
         require_change = False
-        
+
         if not auth_record:
             # FIRST LOGIN ATTEMPT EVER for this user
             # Default behavior: Password MUST be enrollment number
             if password == enrollment:
                 # Create auth record with HASHED password
                 hashed_pw = generate_password_hash(enrollment)
-                cursor_p.execute("INSERT INTO student_auth (enrollment_no, password, is_first_login) VALUES (?, ?, 1)", 
+                cursor_p.execute("INSERT INTO student_auth (enrollment_no, password, is_first_login) VALUES (?, ?, 1)",
                                  (enrollment, hashed_pw))
                 conn_portal.commit()
                 _push_to_cloud(
@@ -1489,7 +1475,7 @@ def api_login():
         else:
             # Existing auth record
             stored_pw = auth_record['password']
-            
+
             # 1. Try verifying hash
             is_valid = False
             try:
@@ -1503,25 +1489,25 @@ def api_login():
                     new_hash = generate_password_hash(password)
                     cursor_p.execute("UPDATE student_auth SET password = ? WHERE enrollment_no = ?", (new_hash, enrollment))
                     conn_portal.commit()
-            
+
             if not is_valid:
                 conn_portal.close()
                 return jsonify({'status': 'error', 'message': 'Invalid password'}), 401
-                
+
             if auth_record['is_first_login']:
                 require_change = True
 
         # Login Success - Create Session
         session['student_id'] = enrollment
         session['logged_in'] = True
-        
+
         conn_portal.close()
-        
+
         # Return full user details (similar to /api/me) for Profile page consistency
         student_year = student['year'] if student['year'] else '1st'
-        
+
         return jsonify({
-            'status': 'success', 
+            'status': 'success',
             'enrollment_no': enrollment,
             'name': student['name'],
             'department': student['department'] if student['department'] else 'General',
@@ -1538,10 +1524,10 @@ def api_login():
 def api_forgot_password():
     data = request.json
     enrollment = data.get('enrollment_no')
-    
+
     if not enrollment:
         return jsonify({'status': 'error', 'message': 'Enrollment number required'}), 400
-        
+
     try:
         # Verify Student Exists in Library DB
         conn_lib = get_library_db()
@@ -1549,31 +1535,31 @@ def api_forgot_password():
         cursor_lib.execute("SELECT name, email FROM students WHERE enrollment_no = ?", (enrollment,))
         student = cursor_lib.fetchone()
         conn_lib.close()
-        
+
         if not student:
             return jsonify({'status': 'error', 'message': 'Student not found'}), 404
-            
+
         student_name = student['name'].split()[0] if student and student['name'] else "Student"
-        
+
         # Create Request in Portal DB
         conn_portal = get_portal_db()
         cursor_portal = conn_portal.cursor()
-        
+
         # Check for existing pending request to avoid spam
         # Use req_id for PostgreSQL compatibility (primary key column name)
         pk = _requests_pk_column(conn_portal)
-        cursor_portal.execute(f"SELECT {pk} FROM requests WHERE enrollment_no = ? AND request_type = ? AND status = ?", 
+        cursor_portal.execute(f"SELECT {pk} FROM requests WHERE enrollment_no = ? AND request_type = ? AND status = ?",
                              (enrollment, 'password_reset', 'pending'))
         existing = cursor_portal.fetchone()
         if existing:
              conn_portal.close()
              return jsonify({'status': 'error', 'message': 'A reset request is already pending.'}), 400
-             
+
         cursor_portal.execute("INSERT INTO requests (enrollment_no, request_type, details) VALUES (?, ?, ?)",
                        (enrollment, 'password_reset', 'Request to reset password to default.'))
         conn_portal.commit()
         conn_portal.close()
-        
+
         # Send Receipt Email (non-blocking)
         try:
             email_body = generate_email_template(
@@ -1588,9 +1574,9 @@ def api_forgot_password():
         except Exception as email_error:
             print(f"Email notification failed (non-critical): {email_error}")
             # Continue - request was created successfully even if email fails
-        
+
         return jsonify({'status': 'success', 'message': 'Password reset request submitted successfully'})
-        
+
     except Exception as e:
         import traceback
         print(f"Forgot password error: {e}")
@@ -1602,14 +1588,14 @@ def api_forgot_password():
 def api_change_password():
     if not session.get('logged_in'):
         return jsonify({'status': 'error', 'message': 'Not logged in'}), 401
-        
+
     data = request.json
     new_password = data.get('new_password', '').strip()
     enrollment = session.get('student_id')
-    
+
     if not new_password or len(new_password) < 6:
         return jsonify({'status': 'error', 'message': 'Password must be at least 6 characters'}), 400
-    
+
     # Get student name from library.db
     conn_lib = get_library_db()
     cursor_lib = conn_lib.cursor()
@@ -1617,30 +1603,30 @@ def api_change_password():
     student = cursor_lib.fetchone()
     conn_lib.close()
     student_name = student['name'] if student else enrollment
-    
+
     # Update password in portal.db
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     # Hash the new password
     hashed_pw = generate_password_hash(new_password)
-    
+
     cursor.execute("""
-        UPDATE student_auth 
+        UPDATE student_auth
         SET password = ?, is_first_login = 0, last_changed = CURRENT_TIMESTAMP
         WHERE enrollment_no = ?
     """, (hashed_pw, enrollment))
-    
+
     _push_to_cloud(
         "INSERT INTO student_auth (enrollment_no, password, is_first_login, last_changed) VALUES (?, ?, 0, CURRENT_TIMESTAMP) ON CONFLICT (enrollment_no) DO UPDATE SET password = EXCLUDED.password, is_first_login = 0, last_changed = CURRENT_TIMESTAMP",
         (enrollment, hashed_pw)
     )
-    
+
     conn.commit()
     conn.close()
-    
+
     return jsonify({
-        'status': 'success', 
+        'status': 'success',
         'message': 'Password updated successfully',
         'name': student_name,
         'enrollment_no': enrollment
@@ -1747,7 +1733,7 @@ def api_public_register_student():
 def api_update_settings():
     if 'student_id' not in session:
         return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
-        
+
     data = request.json or {}
     enrollment = session['student_id']
 
@@ -1801,7 +1787,7 @@ def api_update_settings():
 
     conn.commit()
     conn.close()
-    
+
     return jsonify({'status': 'success', 'message': 'Settings updated successfully'})
 
 @app.route('/api/profile/photo', methods=['GET', 'POST', 'DELETE'])
@@ -1845,15 +1831,15 @@ def api_profile_photo():
         # Save new photo
         save_path = os.path.join(PROFILE_PHOTO_FOLDER, f"{enrollment}{ext}")
         photo.save(save_path)
-        
+
         return jsonify({'status': 'success', 'message': 'Profile photo updated'})
-        
+
     if request.method == 'DELETE':
         deleted = False
         for old_ext in ['.jpg', '.jpeg', '.png']:
             old_path = os.path.join(PROFILE_PHOTO_FOLDER, f"{enrollment}{old_ext}")
             if os.path.exists(old_path):
-                try: 
+                try:
                     os.remove(old_path)
                     deleted = True
                 except OSError as e:
@@ -1873,11 +1859,11 @@ def api_loan_history():
     """Get comprehensive loan history with all statuses"""
     if 'student_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
-    
+
     enrollment = session['student_id']
     conn = get_library_db()
     cursor = conn.cursor()
-    
+
     # Get ALL borrow records (borrowed, returned, overdue)
     cursor.execute("""
         SELECT b.title, b.author, b.category, b.cover_url, br.borrow_date, br.due_date, br.return_date, br.status, br.fine
@@ -1889,15 +1875,15 @@ def api_loan_history():
 
     all_records = [dict(row) for row in cursor.fetchall()]
     conn.close()
-    
+
     # Categorize records
     currently_borrowed = []
     returned_on_time = []
     returned_late = []
     currently_overdue = []
-    
+
     today = datetime.now()
-    
+
     for record in all_records:
         # Determine actual status
         if record['status'] == 'borrowed':
@@ -1930,7 +1916,7 @@ def api_loan_history():
                 except:
                     record['actual_status'] = 'Returned'
                     returned_on_time.append(record)
-    
+
     return jsonify({
         'currently_borrowed': currently_borrowed,
         'currently_overdue': currently_overdue,
@@ -1947,21 +1933,21 @@ def api_get_notifications():
     """Unified Notification Stream"""
     if 'student_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
-    
+
     enrollment = session['student_id']
     notifications = []
-    
+
     # 1. Fetch Persistent Notifications (History)
     conn = get_portal_db()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT * FROM user_notifications 
-        WHERE enrollment_no = ? 
-        ORDER BY created_at DESC 
+        SELECT * FROM user_notifications
+        WHERE enrollment_no = ?
+        ORDER BY created_at DESC
         LIMIT 50
     """, (enrollment,))
     history_items = [dict(row) for row in cursor.fetchall()]
-    
+
     # 2. Real-time Overdue Alerts (High Priority)
     conn_lib = get_library_db()
     cursor_lib = conn_lib.cursor()
@@ -1973,16 +1959,16 @@ def api_get_notifications():
     """, (enrollment,))
     borrows = cursor_lib.fetchall()
     conn_lib.close()
-    
+
     today = datetime.now()
     active_alerts = []
-    
+
     for row in borrows:
         if row['due_date']:
             try:
                 due_dt = datetime.strptime(row['due_date'], '%Y-%m-%d')
                 delta = (due_dt - today).days
-                
+
                 if delta < 0:
                     active_alerts.append({
                         'id': f"overdue_{row['book_id']}", # Virtual ID
@@ -2024,7 +2010,7 @@ def api_get_notifications():
     cursor.execute("SELECT * FROM notices WHERE active = 1 ORDER BY created_at DESC LIMIT 10")
     notices = [dict(row) for row in cursor.fetchall()]
     broadcasts = []
-    
+
     for note in notices:
         broadcasts.append({
             'id': f"notice_{note['id']}",
@@ -2037,13 +2023,13 @@ def api_get_notifications():
         })
 
     conn.close()
-    
+
     # Combine: Security > Overdue > History > Broadcasts
     # Note: History includes past request updates. Broadcasts are general.
     # We'll merge them all and sort by date for the "All" tab.
-    
+
     combined = active_alerts + history_items + broadcasts
-    
+
     # Sort by created_at desc
     def get_date(item):
         try:
@@ -2056,17 +2042,17 @@ def api_get_notifications():
                  return datetime.min
 
     combined.sort(key=get_date, reverse=True)
-    
+
     # Count Unread
     # For generated items (alerts/broadcasts), they count as unread if they aren't explicitly suppressed.
     # Logic: Database items have 'is_read'. Virtual items (Overdue/Security) depend on existence.
     # Broadcasts: We don't have per-user read state yet. We'll mark them as read for badge count to avoid permanent red dot,
     # OR we just count DB items + Active Alerts.
-    
+
     unread_db = len([n for n in history_items if not n['is_read']])
     unread_alerts = len(active_alerts) # Alerts are always actionable/unread
     # We won't count Broadcasts in the badge to avoid annoyance, they appear in the list silently (or maybe separate logic later)
-    
+
     return jsonify({
         'notifications': combined,
         'unread_count': unread_db + unread_alerts
@@ -2076,20 +2062,20 @@ def api_get_notifications():
 def api_mark_read():
     if 'student_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
-    
+
     data = request.json
     notif_id = data.get('id')
     enrollment = session['student_id']
-    
+
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     if notif_id == 'all':
         cursor.execute("UPDATE user_notifications SET is_read = 1 WHERE enrollment_no = ?", (enrollment,))
     elif str(notif_id).isdigit():
         # Only mark DB items (virtual alerts can't be marked read via API, they persist until resolved)
         cursor.execute("UPDATE user_notifications SET is_read = 1 WHERE id = ? AND enrollment_no = ?", (notif_id, enrollment))
-        
+
     conn.commit()
     conn.close()
     return jsonify({'status': 'success'})
@@ -2098,7 +2084,7 @@ def api_mark_read():
 def api_delete_notification(notif_id):
     if 'student_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
-        
+
     enrollment = session['student_id']
     conn = get_portal_db()
     cursor = conn.cursor()
@@ -2112,24 +2098,24 @@ def api_admin_notices():
     """Admin management for notices"""
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     if request.method == 'GET':
         # List all notices (active and inactive)
         cursor.execute("SELECT * FROM notices ORDER BY created_at DESC")
         notices = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return jsonify({'notices': notices})
-        
+
     elif request.method == 'POST':
         # Create new notice
         data = request.json
         title = data.get('title')
         message = data.get('message')
-        
+
         if not title or not message:
             conn.close()
             return jsonify({'status': 'error', 'message': 'Title and message required'}), 400
-            
+
         cursor.execute("INSERT INTO notices (title, message) VALUES (?, ?)", (title, message))
         conn.commit()
         conn.close()
@@ -2155,13 +2141,13 @@ def api_logout():
 def api_me():
     if 'student_id' not in session:
         return jsonify({'user': None})
-    
+
     conn = get_library_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM students WHERE enrollment_no = ?", (session['student_id'],))
     student = cursor.fetchone()
     conn.close()
-    
+
     if student:
         # Determine if Pass Out
         student_year = student['year'] if student['year'] else '1st'
@@ -2170,18 +2156,18 @@ def api_me():
         if student_year.strip().lower() in ['pass out', 'passout', 'passed out', 'alumni', 'graduate']:
             student_year = 'Pass Out'
             is_pass_out = True
-        
+
         # Fetch User Settings Override
         conn_portal = get_portal_db()
         cursor_p = conn_portal.cursor()
         cursor_p.execute("SELECT * FROM user_settings WHERE enrollment_no = ?", (session['student_id'],))
         settings = cursor_p.fetchone()
         conn_portal.close()
-        
+
         # Default Email logic
         default_email = f"{student['name'].replace(' ', '.').lower()}@gpa.edu"
         user_email = settings['email'] if settings and settings['email'] else dict(student).get('email', default_email)
-        
+
         return jsonify({'user': {
             'name': student['name'],
             'enrollment_no': student['enrollment_no'],
@@ -2213,7 +2199,7 @@ def api_user_policies():
     """Fetch user specific policies and account info"""
     if 'student_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
-        
+
     return jsonify({
         'policies': {
             'max_books': 5,
@@ -2228,16 +2214,16 @@ def api_alerts():
     """Lightweight check for overdue items and security alerts"""
     if 'student_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
-    
+
     enrollment = session['student_id']
-    
+
     # 1. Check Security Alert (Highest Priority)
     conn_portal = get_portal_db()
     cursor_p = conn_portal.cursor()
     cursor_p.execute("SELECT is_first_login FROM student_auth WHERE enrollment_no = ?", (enrollment,))
     auth_record = cursor_p.fetchone()
     conn_portal.close()
-    
+
     if auth_record and auth_record['is_first_login']:
         return jsonify({
             'has_alert': True,
@@ -2246,11 +2232,11 @@ def api_alerts():
             'action_link': '/settings', # Or prompt modal
             'count': 1
         })
-    
+
     # 2. Check Overdue Items
     conn = get_library_db()
     cursor = conn.cursor()
-    
+
     # Check for active borrows only - fast query
     cursor.execute("""
         SELECT b.title, br.due_date, COALESCE(br.fine, 0) as fine
@@ -2258,16 +2244,16 @@ def api_alerts():
         JOIN books b ON br.book_id = b.book_id
         WHERE br.enrollment_no = ? AND br.status = 'borrowed'
     """, (enrollment,))
-    
+
     borrows = cursor.fetchall()
     conn.close()
-    
+
     today = datetime.now()
     fine_per_day = get_portal_fine_per_day()
     overdue_count = 0
     total_fine = 0
     overdue_titles = []
-    
+
     for row in borrows:
         if row['due_date']:
             try:
@@ -2282,7 +2268,7 @@ def api_alerts():
                     overdue_titles.append(row['title'])
             except:
                 pass
-                
+
     return jsonify({
         'has_alert': overdue_count > 0,
         'type': 'overdue',
@@ -2296,7 +2282,7 @@ def api_services():
     """Fetch available digital resources and services"""
     if 'student_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
-    
+
     # In a real app, these would be in a 'resources' table
     resources = [
         {
@@ -2324,7 +2310,7 @@ def api_services():
             'icon': "Archive"
         }
     ]
-    
+
     return jsonify({'resources': resources})
 
 # --- Dashboard Data Aggregation ---
@@ -2333,13 +2319,13 @@ def api_services():
 def api_dashboard():
     if 'student_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
-    
+
     enrollment = session['student_id']
-    
+
     # 1. Fetch Core Data (Read-Only)
     conn = get_library_db()
     cursor = conn.cursor()
-    
+
     # Active Loans
     cursor.execute("""
         SELECT b.title, b.author, b.cover_url, br.borrow_date, br.due_date, br.book_id, br.accession_no, COALESCE(br.fine, 0) as fine
@@ -2349,7 +2335,7 @@ def api_dashboard():
         ORDER BY br.due_date ASC
     """, (enrollment,))
     raw_borrows = cursor.fetchall()
-    
+
     # History
     cursor.execute("""
         SELECT b.title, b.author, b.category, br.borrow_date, br.return_date, br.status
@@ -2360,20 +2346,20 @@ def api_dashboard():
         LIMIT 50
     """, (enrollment,))
     raw_history = cursor.fetchall()
-    
+
     conn.close()
-    
+
     # 2. Process Business Logic (Fines/Alerts)
     borrows = []
     notifications = []
-    
+
     # High Priority Auth Alert
     conn_portal = get_portal_db()
     cursor_p = conn_portal.cursor()
     cursor_p.execute("SELECT is_first_login FROM student_auth WHERE enrollment_no = ?", (enrollment,))
     auth_record = cursor_p.fetchone()
     conn_portal.close()
-    
+
     if auth_record and auth_record['is_first_login']:
          notifications.append({
             'type': 'danger',
@@ -2383,7 +2369,7 @@ def api_dashboard():
 
     today = datetime.now().date()
     fine_per_day = get_portal_fine_per_day()
-    
+
     for row in raw_borrows:
         item = dict(row)
         if item['due_date']:
@@ -2397,7 +2383,7 @@ def api_dashboard():
                 item['borrow_date'] = _to_iso_date(item.get('borrow_date'))
 
                 delta = (due_d - today).days
-                
+
                 # Logic: Green (3+), Yellow (1-2), Red (<0)
                 if delta < 0:
                     item['status'] = 'overdue'
@@ -2487,24 +2473,24 @@ def api_dashboard():
         'fav_category': 'General',
         'categories': {}
     }
-    
+
     # Category Dist
     cat_count = {}
     for book in raw_history:
         cat = book['category'] or 'Uncategorized'
         cat_count[cat] = cat_count.get(cat, 0) + 1
-    
+
     stats['categories'] = cat_count
     if cat_count:
         stats['fav_category'] = max(cat_count, key=cat_count.get)
-        
+
     # Badges Logic
     badges = []
     if stats['total_books'] >= 5:
         badges.append({'id': 'bookworm', 'label': 'Bookworm', 'icon': '🐛', 'color': 'bg-emerald-100 text-emerald-700'})
     if stats['total_books'] >= 10:
         badges.append({'id': 'scholar', 'label': 'Scholar', 'icon': '🎓', 'color': 'bg-indigo-100 text-indigo-700'})
-    
+
     # Check for overdue history
     has_overdues = any(x['status'] == 'overdue' for x in raw_history) # raw_history needs status mapping
     if not has_overdues and stats['total_books'] > 2:
@@ -2557,29 +2543,29 @@ def get_book_details(book_id):
     try:
         conn = get_library_db()
         cursor = conn.cursor()
-        
+
         # Fetch book details
         cursor.execute("SELECT * FROM books WHERE book_id = ?", (str(book_id),))
         book = cursor.fetchone()
-        
+
         if not book:
             conn.close()
             return jsonify({'error': 'Book not found'}), 404
-            
+
         book_data = dict(book)
-        
+
         # Calculate availability
         cursor.execute("SELECT COUNT(*) FROM borrow_records WHERE book_id = ? AND status = 'borrowed'", (str(book_id),))
         borrowed_count = cursor.fetchone()[0]
         book_data['available_copies'] = book_data['total_copies'] - borrowed_count
-        
+
         # Fetch Ratings
         portal_conn = get_portal_db()
         portal_cursor = portal_conn.cursor()
-        
+
         # Check if current user is on waitlist & Get their rating
         user_rating = 0
-        
+
         if 'student_id' in session:
             portal_cursor.execute(
                 "SELECT id FROM book_waitlist WHERE enrollment_no = ? AND book_id = ? AND notified = 0",
@@ -2594,7 +2580,7 @@ def get_book_details(book_id):
                 (session['student_id'], str(book_id))
             )
             book_data['isWishlisted'] = portal_cursor.fetchone() is not None
-            
+
             portal_cursor.execute(
                 "SELECT rating FROM book_ratings WHERE enrollment_no = ? AND book_id = ?",
                 (session['student_id'], str(book_id))
@@ -2604,15 +2590,15 @@ def get_book_details(book_id):
                 user_rating = rating_entry['rating']
         else:
             book_data['on_waitlist'] = False
-            
+
         # Get Average Rating
         portal_cursor.execute("SELECT AVG(rating), COUNT(rating) FROM book_ratings WHERE book_id = ?", (str(book_id),))
         rating_stats = portal_cursor.fetchone()
-        
+
         book_data['rating_avg'] = round(rating_stats[0], 1) if rating_stats[0] else None
         book_data['rating_count'] = rating_stats[1] if rating_stats[1] else 0
         book_data['user_rating'] = user_rating
-        
+
         portal_conn.close()
         conn.close()
         return jsonify(book_data)
@@ -2629,22 +2615,22 @@ def rate_book(book_id):
         rating = int(request.json.get('rating', 0))
         if rating < 1 or rating > 5:
             return jsonify({'error': 'Invalid rating'}), 400
-        
+
         conn = get_portal_db()
         cursor = conn.cursor()
-        
+
         cursor.execute("SELECT id FROM book_ratings WHERE book_id = ? AND enrollment_no = ?", (str(book_id), enrollment))
         if cursor.fetchone():
             cursor.execute("UPDATE book_ratings SET rating = ? WHERE book_id = ? AND enrollment_no = ?", (rating, str(book_id), enrollment))
         else:
             cursor.execute("INSERT INTO book_ratings (book_id, enrollment_no, rating) VALUES (?, ?, ?)", (str(book_id), enrollment, rating))
-        
+
         conn.commit()
-        
+
         cursor.execute("SELECT AVG(rating), COUNT(rating) FROM book_ratings WHERE book_id = ?", (str(book_id),))
         stats = cursor.fetchone()
         conn.close()
-        
+
         return jsonify({'status': 'success', 'new_avg': round(stats[0], 1) if stats[0] else 0, 'new_count': stats[1] if stats[1] else 0})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -2657,7 +2643,7 @@ def toggle_wishlist_api(book_id):
         enrollment = session['student_id']
         conn = get_portal_db()
         cursor = conn.cursor()
-        
+
         cursor.execute("SELECT id FROM book_wishlist WHERE book_id = ? AND enrollment_no = ?", (str(book_id), enrollment))
         if cursor.fetchone():
             cursor.execute("DELETE FROM book_wishlist WHERE book_id = ? AND enrollment_no = ?", (str(book_id), enrollment))
@@ -2665,7 +2651,7 @@ def toggle_wishlist_api(book_id):
         else:
             cursor.execute("INSERT INTO book_wishlist (book_id, enrollment_no) VALUES (?, ?)", (str(book_id), enrollment))
             status = 'added'
-            
+
         conn.commit()
         conn.close()
         return jsonify({'status': 'success', 'action': status})
@@ -2677,35 +2663,35 @@ def add_to_waitlist(book_id):
     """Add student to waitlist for out-of-stock book."""
     if 'student_id' not in session:
         return jsonify({'error': 'Not authenticated'}), 401
-    
+
     try:
         enrollment_no = session['student_id']
-        
+
         # Get book details
         library_conn = get_library_db()
         library_cursor = library_conn.cursor()
         library_cursor.execute("SELECT title, total_copies FROM books WHERE book_id = ?", (book_id,))
         book = library_cursor.fetchone()
-        
+
         if not book:
             library_conn.close()
             return jsonify({'error': 'Book not found'}), 404
-        
+
         book_title = book['title']
-        
+
         # Check availability
         library_cursor.execute("SELECT COUNT(*) FROM borrow_records WHERE book_id = ? AND status = 'borrowed'", (book_id,))
         borrowed_count = library_cursor.fetchone()[0]
         available = book['total_copies'] - borrowed_count
         library_conn.close()
-        
+
         if available > 0:
             return jsonify({'error': 'Book is currently available'}), 400
-        
+
         # Add to waitlist
         portal_conn = get_portal_db()
         portal_cursor = portal_conn.cursor()
-        
+
         try:
             portal_cursor.execute(
                 "INSERT INTO book_waitlist (enrollment_no, book_id, book_title) VALUES (?, ?, ?)",
@@ -2713,7 +2699,7 @@ def add_to_waitlist(book_id):
             )
             portal_conn.commit()
             portal_conn.close()
-            
+
             return jsonify({
                 'success': True,
                 'message': 'You will be notified when this book becomes available'
@@ -2721,7 +2707,7 @@ def add_to_waitlist(book_id):
         except sqlite3.IntegrityError:
             portal_conn.close()
             return jsonify({'error': 'You are already on the waitlist for this book'}), 400
-            
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -2730,29 +2716,29 @@ def remove_from_waitlist(book_id):
     """Remove student from waitlist."""
     if 'student_id' not in session:
         return jsonify({'error': 'Not authenticated'}), 401
-    
+
     try:
         enrollment_no = session['student_id']
-        
+
         portal_conn = get_portal_db()
         portal_cursor = portal_conn.cursor()
-        
+
         portal_cursor.execute(
             "DELETE FROM book_waitlist WHERE enrollment_no = ? AND book_id = ? AND notified = 0",
             (enrollment_no, book_id)
         )
         portal_conn.commit()
-        
+
         if portal_cursor.rowcount == 0:
             portal_conn.close()
             return jsonify({'error': 'Not on waitlist for this book'}), 404
-        
+
         portal_conn.close()
         return jsonify({
             'success': True,
             'message': 'Removed from waitlist'
         })
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -2767,7 +2753,7 @@ def generate_email_template(header_title, user_name, main_text, details_dict=Non
         'orange': {'bg': '#dc3545', 'box_bg': '#fff5f5', 'box_border': '#feb2b2', 'accent': '#c53030'}
     }
     c = colors.get(theme, colors['blue'])
-    
+
     # Build Details Table
     details_html = ""
     if details_dict:
@@ -2807,9 +2793,9 @@ def generate_email_template(header_title, user_name, main_text, details_dict=Non
             <div class="content">
                 <p style="font-size: 16px;">Dear <strong>{user_name}</strong>,</p>
                 <p style="font-size: 16px;">{main_text}</p>
-                
+
                 {details_html}
-                
+
                 <p style="margin-top: 30px;">Best regards,<br><strong>GPA Library Team</strong></p>
             </div>
             <div class="footer">
@@ -2879,7 +2865,7 @@ def api_submit_request():
             book_id = parsed.get('book_id') if isinstance(parsed, dict) else None
         except:
             book_id = None
-            
+
         if book_id:
             # 1. Check for pending requests for the same book
             conn_dup = get_portal_db()
@@ -2901,26 +2887,26 @@ def api_submit_request():
                 except:
                     continue
             conn_dup.close()
-            
+
             # 2. Check active loans and borrow limits
             conn_lib = get_library_db()
             cur_lib = conn_lib.cursor()
-            
+
             # Check if already borrowed by this student
-            cur_lib.execute("SELECT COUNT(*) as count FROM borrow_records WHERE enrollment_no = ? AND book_id = ? AND status = 'borrowed'", 
+            cur_lib.execute("SELECT COUNT(*) as count FROM borrow_records WHERE enrollment_no = ? AND book_id = ? AND status = 'borrowed'",
                             (session['student_id'], book_id))
             if cur_lib.fetchone()['count'] > 0:
                 conn_lib.close()
                 return jsonify({'error': 'You already have an active loan for this book.'}), 409
-                
+
             # Check max borrow limit (configurable, assuming 5 as default limit for students)
             limit = int(os.getenv('MAX_BOOKS_PER_STUDENT', 5))
-            cur_lib.execute("SELECT COUNT(*) as count FROM borrow_records WHERE enrollment_no = ? AND status = 'borrowed'", 
+            cur_lib.execute("SELECT COUNT(*) as count FROM borrow_records WHERE enrollment_no = ? AND status = 'borrowed'",
                             (session['student_id'],))
             if cur_lib.fetchone()['count'] >= limit:
                 conn_lib.close()
                 return jsonify({'error': f'Borrow limit reached. You can only borrow up to {limit} books.'}), 403
-                
+
             conn_lib.close()
 
 
@@ -2941,17 +2927,17 @@ def api_submit_request():
                        (session['student_id'], req_type, details_to_store))
         conn.commit()
         conn.close()
-        
+
         # Send Email Notification
         # Send Email Notification
         conn_lib = get_library_db()
         cursor_lib = conn_lib.cursor()
-        
+
         # Fetch Name
         cursor_lib.execute("SELECT name FROM students WHERE enrollment_no = ?", (session['student_id'],))
         student = cursor_lib.fetchone()
         student_name = student['name'].split()[0] if student and student['name'] else "Student"
-        
+
         # Helper to parse book title from string details
         def get_title_from_details(details_obj):
             t = req_type
@@ -2977,7 +2963,7 @@ def api_submit_request():
         main_text = ""
         details_dict = {}
         theme = 'blue'
-        
+
         current_date_str = datetime.now().strftime('%d %b %Y, %I:%M %p')
 
         if req_type == 'book_request':
@@ -2990,7 +2976,7 @@ def api_submit_request():
                 'Request Date': current_date_str,
                 'Status': 'Pending Approval'
             }
-            
+
         elif req_type == 'renewal':
             b_title = get_title_from_details(details)
             email_subject = f"Renewal Request: {b_title}"
@@ -3001,7 +2987,7 @@ def api_submit_request():
                 'Request Date': current_date_str,
                 'Status': 'Pending Approval'
             }
-            
+
         elif req_type == 'profile_update':
             email_subject = "Profile Update Request"
             header_title = "Profile Update"
@@ -3011,7 +2997,7 @@ def api_submit_request():
                 'Requested Changes': details_summary,
                 'Request Date': current_date_str
             }
-            
+
         else:
             # Generic fallback
             email_subject = f"Request Received: {req_type}"
@@ -3028,9 +3014,9 @@ def api_submit_request():
             theme='blue',
             footer_note="You will be notified once the librarian reviews your request."
         )
-        
+
         trigger_notification_email(session['student_id'], email_subject, email_body)
-        
+
         return jsonify({'status': 'success', 'message': 'Request submitted to librarian'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -3039,7 +3025,7 @@ def api_submit_request():
 def api_get_requests():
     if 'student_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
-    
+
     conn = get_portal_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM requests WHERE enrollment_no = ? ORDER BY created_at DESC", (session['student_id'],))
@@ -3061,23 +3047,23 @@ def api_get_requests():
 def api_cancel_request(req_id):
     if 'student_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
-    
+
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     # Verify ownership and status
     pk = _requests_pk_column(conn)
     cursor.execute(f"SELECT status FROM requests WHERE {pk} = ? AND enrollment_no = ?", (req_id, session['student_id']))
     req = cursor.fetchone()
-    
+
     if not req:
         conn.close()
         return jsonify({'error': 'Request not found'}), 404
-        
+
     if req['status'] != 'pending':
         conn.close()
         return jsonify({'error': f'Cannot cancel request in {req["status"]} state'}), 400
-        
+
     # Cancel request
     try:
         cursor.execute(f"UPDATE requests SET status = 'cancelled' WHERE {pk} = ? AND enrollment_no = ?", (req_id, session['student_id']))
@@ -3301,11 +3287,11 @@ def api_admin_request_history():
     """Fetch processed (approved/rejected) requests with search and filter"""
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     # Get filter params
     q = request.args.get('q', '').strip()
     days = request.args.get('days')
-    
+
     pk = _requests_pk_column(conn)
     # Base query
     query = f"""
@@ -3314,15 +3300,15 @@ def api_admin_request_history():
         WHERE status IN ('approved', 'rejected')
     """
     params = []
-    
+
     # Date filter (backend-agnostic)
     if days and days.isdigit():
         cutoff = datetime.now() - timedelta(days=int(days))
         query += " AND created_at >= ?"
         params.append(cutoff.strftime('%Y-%m-%d %H:%M:%S'))
-    
+
     query += " ORDER BY created_at DESC LIMIT 100"
-    
+
     cursor.execute(query, params)
     processed_requests = []
     for row in cursor.fetchall():
@@ -3332,15 +3318,15 @@ def api_admin_request_history():
         except:
             req['details'] = {'raw': req['details']}
         processed_requests.append(req)
-    
+
     conn.close()
-    
+
     # Get student names and filter by search query
     conn_lib = get_library_db()
     cursor_lib = conn_lib.cursor()
-    
+
     filtered_requests = []
-    
+
     for req in processed_requests:
         cursor_lib.execute("SELECT name FROM students WHERE enrollment_no = ?", (req['enrollment_no'],))
         student = cursor_lib.fetchone()
@@ -3357,23 +3343,23 @@ def api_admin_request_history():
             else:
                 student_name = 'Unknown'
         req['student_name'] = student_name
-        
+
         # Apply search filter (if search query exists)
         if q:
             search_str = q.lower()
-            if (search_str in req['enrollment_no'].lower() or 
-                search_str in student_name.lower() or 
+            if (search_str in req['enrollment_no'].lower() or
+                search_str in student_name.lower() or
                 search_str in req['request_type'].lower()):
                 filtered_requests.append(req)
         else:
             filtered_requests.append(req)
-    
+
     conn_lib.close()
-    
+
     # Count by status (of filtered results)
     approved_count = len([r for r in filtered_requests if r['status'] == 'approved'])
     rejected_count = len([r for r in filtered_requests if r['status'] == 'rejected'])
-    
+
     return jsonify({
         'history': filtered_requests,
         'counts': {
@@ -3388,11 +3374,11 @@ def api_admin_deletion_history():
     """Fetch processed deletion requests with search and filter"""
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     # Get filter params
     q = request.args.get('q', '').strip()
     days = request.args.get('days')
-    
+
     # Base query
     query = """
         SELECT id, student_id, reason, status, timestamp
@@ -3400,46 +3386,46 @@ def api_admin_deletion_history():
         WHERE status IN ('approved', 'rejected')
     """
     params = []
-    
+
     # Date filter (backend-agnostic)
     if days and days.isdigit():
         cutoff = datetime.now() - timedelta(days=int(days))
         query += " AND timestamp >= ?"
         params.append(cutoff.strftime('%Y-%m-%d %H:%M:%S'))
-    
+
     query += " ORDER BY timestamp DESC LIMIT 100"
-    
+
     cursor.execute(query, params)
     processed_deletions = [dict(row) for row in cursor.fetchall()]
     conn.close()
-    
+
     # Get student names and filter
     conn_lib = get_library_db()
     cursor_lib = conn_lib.cursor()
-    
+
     filtered_deletions = []
-    
+
     for req in processed_deletions:
         cursor_lib.execute("SELECT name FROM students WHERE enrollment_no = ?", (req['student_id'],))
         student = cursor_lib.fetchone()
         student_name = student['name'] if student else 'Deleted Account'
         req['student_name'] = student_name
-        
+
         # Apply search filter
         if q:
             search_str = q.lower()
-            if (search_str in req['student_id'].lower() or 
+            if (search_str in req['student_id'].lower() or
                 search_str in student_name.lower()):
                 filtered_deletions.append(req)
         else:
             filtered_deletions.append(req)
-    
+
     conn_lib.close()
-    
+
     # Count by status (of filtered results)
     approved_count = len([r for r in filtered_deletions if r['status'] == 'approved'])
     rejected_count = len([r for r in filtered_deletions if r['status'] == 'rejected'])
-    
+
     return jsonify({
         'history': filtered_deletions,
         'counts': {
@@ -3454,16 +3440,16 @@ def api_admin_approve_request(req_id):
     """Approve a general request"""
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     pk = _requests_pk_column(conn)
     # Get the request details
     cursor.execute(f"SELECT * FROM requests WHERE {pk} = ?", (req_id,))
     req = cursor.fetchone()
-    
+
     if not req:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Request not found'}), 404
-    
+
     # Handle special request types
     if req['request_type'] == 'student_registration':
         # Approving a registration inserts into the library DB
@@ -3604,20 +3590,20 @@ def api_admin_approve_request(req_id):
 
     # Update status to approved
     cursor.execute(f"UPDATE requests SET status = 'approved' WHERE {pk} = ?", (req_id,))
-    
+
     # NOTIFICATION TRIGGER: Notify student
     # Parse details to get book name
     message = f"Your {req['request_type']} request has been approved."
     book_title = req['request_type']
-    
+
     try:
         details = json.loads(req['details']) if req['details'] else {}
-        
+
         # Try to find title in details first
         if 'title' in details:
             book_title = details['title']
             message = f"Your request for '{book_title}' has been approved."
-        
+
         # If not, look update from library DB using book_id
         elif 'book_id' in details:
             try:
@@ -3626,13 +3612,13 @@ def api_admin_approve_request(req_id):
                 cursor_lib.execute("SELECT title FROM books WHERE book_id = ?", (details['book_id'],))
                 book_data = cursor_lib.fetchone()
                 conn_lib.close()
-                
+
                 if book_data:
                     book_title = book_data['title']
                     message = f"Your request for '{book_title}' has been approved."
             except:
                 pass
-        
+
         # Handle string details (e.g. "Request for book: Title (ID: X)")
         if isinstance(details, str):
             try:
@@ -3653,16 +3639,16 @@ def api_admin_approve_request(req_id):
         INSERT INTO user_notifications (enrollment_no, type, title, message, link, created_at)
         VALUES (?, 'request_update', 'Request Approved', ?, '/requests', ?)
     """, (req['enrollment_no'], message, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-    
+
     # Email Trigger
     conn_lib = get_library_db()
     cursor_lib = conn_lib.cursor()
     cursor_lib.execute("SELECT name FROM students WHERE enrollment_no = ?", (req['enrollment_no'],))
     student_record = cursor_lib.fetchone()
     conn_lib.close()
-    
+
     student_name = student_record['name'].split()[0] if student_record and student_record['name'] else "Student"
-    
+
     # Email Construction
     email_subject = "Request Approved"
     header_title = "Request Approved"
@@ -3687,14 +3673,14 @@ def api_admin_approve_request(req_id):
         try:
             details_parsed = json.loads(req['details']) if isinstance(req['details'], str) else req['details']
             renewal_book_id = details_parsed.get('book_id') if isinstance(details_parsed, dict) else None
-            
+
             if renewal_book_id:
                 conn_lib = get_library_db()
                 cursor_lib = conn_lib.cursor()
-                
+
                 # Get accession_no if provided (targets specific copy)
                 renewal_accession = details_parsed.get('accession_no') if isinstance(details_parsed, dict) else None
-                
+
                 # Get current due date and extend by loan period (default 7 days)
                 if renewal_accession:
                     cursor_lib.execute(
@@ -3707,17 +3693,17 @@ def api_admin_approve_request(req_id):
                         (renewal_book_id, req['enrollment_no'])
                     )
                 borrow_record = cursor_lib.fetchone()
-                
+
                 if borrow_record and borrow_record['due_date']:
                     try:
                         current_due = datetime.strptime(borrow_record['due_date'], '%Y-%m-%d')
                     except:
                         current_due = datetime.now()
-                    
+
                     # Extend from today or current due date, whichever is later
                     extend_from = max(current_due, datetime.now())
                     new_due_date = extend_from + timedelta(days=7)
-                    
+
                     # Update only the specific copy if accession_no is known
                     if renewal_accession:
                         cursor_lib.execute(
@@ -3741,7 +3727,7 @@ def api_admin_approve_request(req_id):
                 conn_lib.close()
         except Exception as e:
             print(f"Renewal due date extension error: {e}")
-        
+
         email_subject = f"✅ Renewal Approved: {book_title}"
         header_title = "Renewal Approved"
         main_text = f"Your request to renew <strong>{book_title}</strong> was successful. The due date has been extended."
@@ -3764,7 +3750,7 @@ def api_admin_approve_request(req_id):
             if details_updated:
                 conn_lib = get_library_db()
                 cursor_lib = conn_lib.cursor()
-                
+
                 valid_keys = ['name', 'email', 'phone', 'department', 'year']
                 set_clauses = []
                 params = []
@@ -3772,13 +3758,13 @@ def api_admin_approve_request(req_id):
                     if k in details_updated and details_updated[k]:
                         set_clauses.append(f"{k} = ?")
                         params.append(str(details_updated[k]))
-                
+
                 if set_clauses:
                     params.append(req['enrollment_no'])
                     query = f"UPDATE students SET {', '.join(set_clauses)} WHERE enrollment_no = ?"
                     cursor_lib.execute(query, params)
                     conn_lib.commit()
-                    
+
                     try:
                         _push_to_cloud(query, params)
                     except:
@@ -3827,7 +3813,7 @@ def api_admin_approve_request(req_id):
     )
 
     trigger_notification_email(req['enrollment_no'], email_subject, email_body)
-    
+
     conn.commit()
     conn.close()
 
@@ -3855,10 +3841,10 @@ def api_admin_reject_request(req_id):
          # Parse details to get book name
          message = f"Your {req['request_type']} request was rejected."
          book_title = req['request_type']
-         
+
          try:
             details = json.loads(req['details']) if req['details'] else {}
-            
+
             if 'title' in details:
                 book_title = details['title']
                 message = f"Your request for '{book_title}' was rejected."
@@ -3869,13 +3855,13 @@ def api_admin_reject_request(req_id):
                     cursor_lib.execute("SELECT title FROM books WHERE book_id = ?", (details['book_id'],))
                     book_data = cursor_lib.fetchone()
                     conn_lib.close()
-                    
+
                     if book_data:
                         book_title = book_data['title']
                         message = f"Your request for '{book_title}' was rejected."
                 except:
                     pass
-            
+
             # Handle string details
             if isinstance(details, str):
                 try:
@@ -3914,11 +3900,11 @@ def api_admin_reject_request(req_id):
 
          email_subject = f"Request Declined: {book_title}"
          main_text = f"We regret to inform you that your request regarding <strong>{book_title}</strong> could not be fulfilled at this time."
-         
+
          if req['request_type'] == 'profile_update':
              email_subject = "Profile Update Declined"
              main_text = "Your request to update profile details was not approved."
-             
+
          email_body = generate_email_template(
             header_title="Request Declined",
             user_name=student_name,
@@ -3927,12 +3913,12 @@ def api_admin_reject_request(req_id):
             theme='orange',
             footer_note="For more information, please visit the library desk."
          )
-         
+
          trigger_notification_email(req['enrollment_no'], email_subject, email_body)
 
     conn.commit()
     conn.close()
-    
+
     return jsonify({'status': 'success', 'message': 'Request rejected'})
 
 @app.route('/api/admin/deletion/<int:del_id>/approve', methods=['GET', 'POST'])
@@ -3940,23 +3926,23 @@ def api_admin_approve_deletion(del_id):
     """Approve account deletion request"""
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     # Get deletion request
     cursor.execute("SELECT student_id FROM deletion_requests WHERE id = ?", (del_id,))
     req = cursor.fetchone()
-    
+
     if not req:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Deletion request not found'}), 404
-    
+
     student_id = req['student_id']
-    
+
     # Update status
     cursor.execute("UPDATE deletion_requests SET status = 'approved' WHERE id = ?", (del_id,))
-    
+
     # Clean up auth record so student cannot log in
     cursor.execute("DELETE FROM student_auth WHERE enrollment_no = ?", (student_id,))
-    
+
     # Clean up portal requests and notifications
     try:
         cursor.execute("DELETE FROM requests WHERE enrollment_no = ?", (student_id,))
@@ -3970,21 +3956,21 @@ def api_admin_approve_deletion(del_id):
         cursor.execute("DELETE FROM user_settings WHERE enrollment_no = ?", (student_id,))
     except Exception:
         pass
-    
+
     conn.commit()
     conn.close()
-    
+
     # Delete student from the MAIN library database
     try:
         conn_lib = get_library_db()
         cursor_lib = conn_lib.cursor()
-        
+
         # Return any borrowed books (mark as returned)
         cursor_lib.execute(
             "UPDATE borrow_records SET status = 'returned', return_date = ? WHERE enrollment_no = ? AND status = 'borrowed'",
             (datetime.now().strftime('%Y-%m-%d'), student_id)
         )
-        
+
         # Update available copies for returned books
         cursor_lib.execute(
             "SELECT book_id FROM borrow_records WHERE enrollment_no = ? AND return_date = ?",
@@ -3996,12 +3982,12 @@ def api_admin_approve_deletion(del_id):
                 "UPDATE books SET available_copies = available_copies + 1 WHERE book_id = ?",
                 (book_row['book_id'],)
             )
-        
+
         # Delete the student record
         cursor_lib.execute("DELETE FROM students WHERE enrollment_no = ?", (student_id,))
         conn_lib.commit()
         conn_lib.close()
-        
+
         # Push changes to cloud
         today = datetime.now().strftime('%Y-%m-%d')
         _push_to_cloud(
@@ -4011,9 +3997,9 @@ def api_admin_approve_deletion(del_id):
         _push_to_cloud("DELETE FROM students WHERE enrollment_no = ?", (student_id,))
     except Exception as e:
         print(f"[Deletion] Error removing student from library DB: {e}")
-    
+
     return jsonify({
-        'status': 'success', 
+        'status': 'success',
         'message': 'Deletion approved. Student removed from library system.',
         'student_id': student_id
     })
@@ -4023,11 +4009,11 @@ def api_admin_reject_deletion(del_id):
     """Reject account deletion request"""
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     cursor.execute("UPDATE deletion_requests SET status = 'rejected' WHERE id = ?", (del_id,))
     conn.commit()
     conn.close()
-    
+
     return jsonify({'status': 'success', 'message': 'Deletion request rejected'})
 
 @app.route('/api/admin/password-reset/<enrollment_no>', methods=['GET', 'POST'])
@@ -4035,18 +4021,18 @@ def api_admin_reset_password(enrollment_no):
     """Reset student password to enrollment number"""
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     # Check if auth record exists
     cursor.execute("SELECT * FROM student_auth WHERE enrollment_no = ?", (enrollment_no,))
     auth = cursor.fetchone()
-    
+
     # Hash the enrollment number for reset
     hashed_pw = generate_password_hash(enrollment_no)
-    
+
     if auth:
         # Reset to enrollment number and mark as first login
         cursor.execute("""
-            UPDATE student_auth 
+            UPDATE student_auth
             SET password = ?, is_first_login = 1, last_changed = CURRENT_TIMESTAMP
             WHERE enrollment_no = ?
         """, (hashed_pw, enrollment_no))
@@ -4056,17 +4042,17 @@ def api_admin_reset_password(enrollment_no):
             INSERT INTO student_auth (enrollment_no, password, is_first_login)
             VALUES (?, ?, 1)
         """, (enrollment_no, hashed_pw))
-    
+
     _push_to_cloud(
         "INSERT INTO student_auth (enrollment_no, password, is_first_login) VALUES (?, ?, 1) ON CONFLICT (enrollment_no) DO UPDATE SET password = EXCLUDED.password, is_first_login = 1, last_changed = CURRENT_TIMESTAMP",
         (enrollment_no, hashed_pw)
     )
-    
+
     conn.commit()
     conn.close()
-    
+
     return jsonify({
-        'status': 'success', 
+        'status': 'success',
         'message': f'Password reset to enrollment number. Student will be prompted to change on next login.'
     })
 
@@ -4075,39 +4061,39 @@ def api_admin_bulk_password_reset():
     """Reset passwords for all students in a year group or all students"""
     data = request.json
     year = data.get('year')  # '1st', '2nd', '3rd', or None for all
-    
+
     try:
         # Get students from library.db
         conn_lib = get_library_db()
         cursor_lib = conn_lib.cursor()
-        
+
         if year:
             cursor_lib.execute("SELECT enrollment_no FROM students WHERE year = ?", (year,))
         else:
             cursor_lib.execute("SELECT enrollment_no FROM students")
-        
+
         students = cursor_lib.fetchall()
         conn_lib.close()
-        
+
         if not students:
             return jsonify({'status': 'error', 'message': 'No students found'}), 404
-        
+
         # Reset each student's password in portal.db
         conn_portal = get_portal_db()
         cursor_portal = conn_portal.cursor()
-        
+
         reset_count = 0
         for student in students:
             enrollment_no = student['enrollment_no']
             hashed_pw = generate_password_hash(enrollment_no)
-            
+
             # Check if auth record exists
             cursor_portal.execute("SELECT * FROM student_auth WHERE enrollment_no = ?", (enrollment_no,))
             auth = cursor_portal.fetchone()
-            
+
             if auth:
                 cursor_portal.execute("""
-                    UPDATE student_auth 
+                    UPDATE student_auth
                     SET password = ?, is_first_login = 1, last_changed = CURRENT_TIMESTAMP
                     WHERE enrollment_no = ?
                 """, (hashed_pw, enrollment_no))
@@ -4116,23 +4102,23 @@ def api_admin_bulk_password_reset():
                     INSERT INTO student_auth (enrollment_no, password, is_first_login)
                     VALUES (?, ?, 1)
                 """, (enrollment_no, hashed_pw))
-            
+
             _push_to_cloud(
                 "INSERT INTO student_auth (enrollment_no, password, is_first_login) VALUES (?, ?, 1) ON CONFLICT (enrollment_no) DO UPDATE SET password = EXCLUDED.password, is_first_login = 1, last_changed = CURRENT_TIMESTAMP",
                 (enrollment_no, hashed_pw)
             )
             reset_count += 1
-        
+
         conn_portal.commit()
         conn_portal.close()
-        
+
         year_label = f"{year} Year" if year else "All Years"
         return jsonify({
             'status': 'success',
             'message': f'Password reset for {reset_count} students in {year_label}',
             'count': reset_count
         })
-        
+
     except Exception as e:
         print(f"Bulk reset error: {e}")
         return jsonify({'status': 'error', 'message': 'Bulk reset failed'}), 500
@@ -4143,42 +4129,42 @@ def api_admin_auth_stats():
     """Get auth statistics and recent password resets for dashboard"""
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     # Total registered students
     cursor.execute("SELECT COUNT(*) as count FROM student_auth")
     total_registered = cursor.fetchone()['count']
-    
+
     # Students with changed passwords (not first login)
     cursor.execute("SELECT COUNT(*) as count FROM student_auth WHERE is_first_login = 0")
     active_users = cursor.fetchone()['count']
-    
+
     # Students still on default password
     cursor.execute("SELECT COUNT(*) as count FROM student_auth WHERE is_first_login = 1")
     pending_change = cursor.fetchone()['count']
-    
+
     # Recent password resets (by checking last_changed within last 7 days where is_first_login = 1)
     cursor.execute("""
-        SELECT enrollment_no, last_changed 
-        FROM student_auth 
+        SELECT enrollment_no, last_changed
+        FROM student_auth
         WHERE is_first_login = 1 AND last_changed IS NOT NULL
-        ORDER BY last_changed DESC 
+        ORDER BY last_changed DESC
         LIMIT 10
     """)
     recent_resets = [dict(row) for row in cursor.fetchall()]
-    
+
     conn.close()
-    
+
     # Get student names
     conn_lib = get_library_db()
     cursor_lib = conn_lib.cursor()
-    
+
     for reset in recent_resets:
         cursor_lib.execute("SELECT name FROM students WHERE enrollment_no = ?", (reset['enrollment_no'],))
         student = cursor_lib.fetchone()
         reset['student_name'] = student['name'] if student else 'Unknown'
-    
+
     conn_lib.close()
-    
+
     return jsonify({
         'stats': {
             'total_registered': total_registered,
@@ -4193,25 +4179,25 @@ def api_admin_stats():
     """Get portal statistics for dashboard"""
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     # Count requests by status
     cursor.execute("SELECT status, COUNT(*) as count FROM requests GROUP BY status")
     request_stats = {row['status']: row['count'] for row in cursor.fetchall()}
-    
+
     # Count deletion requests by status
     cursor.execute("SELECT status, COUNT(*) as count FROM deletion_requests GROUP BY status")
     deletion_stats = {row['status']: row['count'] for row in cursor.fetchall()}
-    
+
     # Count active auth records
     cursor.execute("SELECT COUNT(*) as count FROM student_auth")
     auth_count = cursor.fetchone()['count']
-    
+
     # Count first-time login pending
     cursor.execute("SELECT COUNT(*) as count FROM student_auth WHERE is_first_login = 1")
     first_login_count = cursor.fetchone()['count']
-    
+
     conn.close()
-    
+
     return jsonify({
         'requests': request_stats,
         'deletions': deletion_stats,
@@ -4228,27 +4214,27 @@ def api_get_study_materials():
     """Get study materials (optionally filtered by year and branch)"""
     year_filter = request.args.get('year', None)
     branch_filter = request.args.get('branch', None)
-    
+
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     query = "SELECT * FROM study_materials WHERE active = 1"
     params = []
-    
+
     if year_filter and year_filter != 'All':
         query += " AND year = ?"
         params.append(year_filter)
-    
+
     if branch_filter and branch_filter != 'All':
         query += " AND (branch = ? OR branch = 'All Branches' OR branch IS NULL OR branch = '')"
         params.append(branch_filter)
-    
+
     query += " ORDER BY upload_date DESC"
-    
+
     cursor.execute(query, params)
     materials = [dict(row) for row in cursor.fetchall()]
     conn.close()
-    
+
     return jsonify({'materials': materials})
 
 def allowed_file(filename):
@@ -4260,55 +4246,55 @@ def api_admin_study_materials():
     """Admin: Manage study materials"""
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     if request.method == 'GET':
         # Get all materials (including inactive)
         cursor.execute("SELECT * FROM study_materials ORDER BY upload_date DESC")
         materials = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return jsonify({'materials': materials})
-    
+
     elif request.method == 'POST':
         # Handle file upload
         if 'file' not in request.files:
             conn.close()
             return jsonify({'status': 'error', 'message': 'No file uploaded'}), 400
-        
+
         file = request.files['file']
         if file.filename == '':
             conn.close()
             return jsonify({'status': 'error', 'message': 'No file selected'}), 400
-        
+
         if not allowed_file(file.filename):
             conn.close()
             return jsonify({'status': 'error', 'message': 'File type not allowed'}), 400
-        
+
         # Get form data
         title = request.form.get('title')
         description = request.form.get('description', '')
         year = request.form.get('year')
         category = request.form.get('category', 'Notes')
         branch = request.form.get('branch', 'Computer')
-        
+
         if not title or not year:
             conn.close()
             return jsonify({'status': 'error', 'message': 'Title and year required'}), 400
-        
+
         # Save file with unique name
         original_filename = secure_filename(file.filename)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         unique_filename = f"{timestamp}_{original_filename}"
         file_path = os.path.join(UPLOAD_FOLDER, unique_filename)
-        
+
         try:
             file.save(file_path)
             file_size = os.path.getsize(file_path)
-            
+
             cursor.execute("""
                 INSERT INTO study_materials (title, description, filename, original_filename, file_size, branch, year, category)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (title, description, unique_filename, original_filename, file_size, branch, year, category))
-            
+
             conn.commit()
             conn.close()
             return jsonify({'status': 'success', 'message': 'File uploaded successfully'})
@@ -4326,14 +4312,14 @@ def download_study_material(material_id):
     cursor.execute("SELECT filename, original_filename FROM study_materials WHERE id = ? AND active = 1", (material_id,))
     material = cursor.fetchone()
     conn.close()
-    
+
     if not material:
         return jsonify({'error': 'File not found'}), 404
-    
+
     file_path = os.path.join(UPLOAD_FOLDER, material['filename'])
     if not os.path.exists(file_path):
         return jsonify({'error': 'File not found on server'}), 404
-    
+
     return send_file(file_path, as_attachment=True, download_name=material['original_filename'])
 
 @app.route('/api/admin/study-materials/<int:material_id>', methods=['DELETE', 'PUT'])
@@ -4341,33 +4327,33 @@ def api_admin_manage_material(material_id):
     """Admin: Delete or update study material"""
     conn = get_portal_db()
     cursor = conn.cursor()
-    
+
     if request.method == 'DELETE':
         # Get filename before deletion
         cursor.execute("SELECT filename FROM study_materials WHERE id = ?", (material_id,))
         material = cursor.fetchone()
-        
+
         # Soft delete (set active = 0)
         cursor.execute("UPDATE study_materials SET active = 0 WHERE id = ?", (material_id,))
         conn.commit()
-        
+
         # Optionally delete physical file (commented out to keep files)
         # if material:
         #     file_path = os.path.join(UPLOAD_FOLDER, material['filename'])
         #     if os.path.exists(file_path):
         #         os.remove(file_path)
-        
+
         conn.close()
         return jsonify({'status': 'success', 'message': 'Material deleted'})
-    
+
     elif request.method == 'PUT':
         # Update material
         data = request.json
         cursor.execute("""
-            UPDATE study_materials 
+            UPDATE study_materials
             SET title = ?, description = ?, drive_link = ?, year = ?, category = ?, branch = ?
             WHERE id = ?
-        """, (data['title'], data.get('description', ''), data.get('drive_link', ''), 
+        """, (data['title'], data.get('description', ''), data.get('drive_link', ''),
               data['year'], data.get('category', 'Notes'), data.get('branch', 'All Branches'), material_id))
         conn.commit()
         conn.close()
@@ -4385,11 +4371,11 @@ def serve(path):
             resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
             resp.headers['Pragma'] = 'no-cache'
         return resp
-    
+
     # If path is an API call that wasn't matched, return 404
     if path.startswith('api/'):
         return jsonify({'error': 'Not Found'}), 404
-        
+
     # Otherwise, for SPA routing, return index.html
     resp = send_from_directory(app.static_folder, 'index.html')
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
