@@ -464,8 +464,13 @@ class RateLimiter:
     
     def _get_client_key(self, endpoint):
         """Generate unique key for client + endpoint"""
-        # Use IP address as identifier
-        client_ip = request.headers.get('X-Forwarded-For', request.remote_addr) or 'unknown'
+        # Use IP address as identifier securely
+        forwarded_for = request.headers.get('X-Forwarded-For')
+        if forwarded_for:
+            # Get the actual client IP (first in the comma-separated list)
+            client_ip = forwarded_for.split(',')[0].strip()
+        else:
+            client_ip = request.remote_addr or 'unknown'
         return f"{client_ip}:{endpoint}"
     
     def _cleanup_old_requests(self, key, window_seconds):
@@ -1411,7 +1416,8 @@ def request_deletion():
         return jsonify({"status": "success", "message": "Deletion request submitted for librarian approval."})
     except Exception as e:
         conn.close()
-        return jsonify({"status": "error", "message": str(e)}), 500
+        _log_portal_exception('api_request_deletion', e)
+        return jsonify({"status": "error", "message": "An internal server error occurred"}), 500
 
 @app.route('/api/login', methods=['POST'])
 @rate_limit
@@ -1517,7 +1523,7 @@ def api_login():
         })
     except Exception as e:
         error_id = _log_portal_exception('api_login', e)
-        return jsonify({'status': 'error', 'message': f'Login failed: {str(e)}', 'error_id': error_id}), 500
+        return jsonify({'status': 'error', 'message': 'Login failed due to an internal error', 'error_id': error_id}), 500
 
 @app.route('/api/public/forgot-password', methods=['POST'])
 @rate_limit
@@ -1726,7 +1732,7 @@ def api_public_register_student():
         })
     except Exception as e:
         error_id = _log_portal_exception('api_public_register_student', e)
-        return jsonify({'status': 'error', 'message': f'Registration failed: {str(e)}', 'error_id': error_id}), 500
+        return jsonify({'status': 'error', 'message': 'Registration failed due to an internal error', 'error_id': error_id}), 500
 
 
 @app.route('/api/settings', methods=['POST'])
@@ -2603,7 +2609,8 @@ def get_book_details(book_id):
         conn.close()
         return jsonify(book_data)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        _log_portal_exception('api_book_details', e)
+        return jsonify({'error': 'An internal server error occurred'}), 500
 
 
 @app.route('/api/books/<book_id>/rate', methods=['POST'])
@@ -2633,7 +2640,8 @@ def rate_book(book_id):
         
         return jsonify({'status': 'success', 'new_avg': round(stats[0], 1) if stats[0] else 0, 'new_count': stats[1] if stats[1] else 0})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        _log_portal_exception('rate_book', e)
+        return jsonify({'error': 'An internal server error occurred'}), 500
 
 @app.route('/api/books/<book_id>/wishlist', methods=['POST'])
 def toggle_wishlist_api(book_id):
@@ -2656,7 +2664,8 @@ def toggle_wishlist_api(book_id):
         conn.close()
         return jsonify({'status': 'success', 'action': status})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        _log_portal_exception('toggle_wishlist_api', e)
+        return jsonify({'error': 'An internal server error occurred'}), 500
 
 @app.route('/api/books/<book_id>/notify', methods=['POST'])
 def add_to_waitlist(book_id):
@@ -2709,7 +2718,8 @@ def add_to_waitlist(book_id):
             return jsonify({'error': 'You are already on the waitlist for this book'}), 400
             
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        _log_portal_exception('add_to_waitlist', e)
+        return jsonify({'error': 'An internal server error occurred'}), 500
 
 @app.route('/api/books/<book_id>/notify', methods=['DELETE'])
 def remove_from_waitlist(book_id):
@@ -2740,7 +2750,8 @@ def remove_from_waitlist(book_id):
         })
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        _log_portal_exception('remove_from_waitlist', e)
+        return jsonify({'error': 'An internal server error occurred'}), 500
 
 def generate_email_template(header_title, user_name, main_text, details_dict=None, theme='blue', footer_note=None):
     """
@@ -3019,7 +3030,8 @@ def api_submit_request():
         
         return jsonify({'status': 'success', 'message': 'Request submitted to librarian'})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        _log_portal_exception('api_request_profile_update', e)
+        return jsonify({'error': 'An internal server error occurred'}), 500
 
 @app.route('/api/requests', methods=['GET'])
 def api_get_requests():
@@ -3072,7 +3084,8 @@ def api_cancel_request(req_id):
         return jsonify({'status': 'success', 'message': 'Request cancelled successfully'})
     except Exception as e:
         conn.close()
-        return jsonify({'error': str(e)}), 500
+        _log_portal_exception('api_cancel_request', e)
+        return jsonify({'error': 'An internal server error occurred'}), 500
 
 @app.route('/api/books')
 def api_books():
@@ -3792,7 +3805,8 @@ def api_admin_approve_request(req_id):
                  (req['enrollment_no'], default_hash)
              )
         except Exception as e:
-             return jsonify({'error': f"Failed to reset password: {str(e)}"}), 500
+             _log_portal_exception('api_admin_reset_password', e)
+             return jsonify({'error': "Failed to reset password due to an internal error"}), 500
 
         email_subject = "✅ Password Reset Successful"
         header_title = "Password Reset"
@@ -4302,7 +4316,8 @@ def api_admin_study_materials():
             conn.close()
             if os.path.exists(file_path):
                 os.remove(file_path)
-            return jsonify({'status': 'error', 'message': f'Upload failed: {str(e)}'}), 500
+            _log_portal_exception('api_admin_study_materials_upload', e)
+            return jsonify({'status': 'error', 'message': 'Upload failed due to an internal error'}), 500
 
 @app.route('/api/study-materials/<int:material_id>/download')
 def download_study_material(material_id):
