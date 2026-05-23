@@ -1,0 +1,92 @@
+def _ensure_sslmode_require(db_url: str) -> str:
+def _extract_supabase_project_ref() -> str | None:
+def _normalize_database_url(db_url: str) -> str:
+def _get_library_settings_path():
+def get_portal_fine_per_day():
+def _is_postgres_connection(conn) -> bool:
+def _push_to_cloud(sql, params=None):
+    def _do_push():
+def _requests_pk_column(conn) -> str:
+def _safe_str(v):
+def _normalize_enrollment(enrollment: str) -> str:
+def _allowed_photo_filename(filename: str) -> bool:
+def _read_file_size_bytes(file_storage) -> int:
+def get_or_create_secret_key():
+def _best_effort_git_commit() -> str | None:
+def _add_version_header(resp):
+def api_version():
+    def __init__(self):
+    def _get_client_key(self, endpoint):
+    def _cleanup_old_requests(self, key, window_seconds):
+    def is_rate_limited(self, endpoint):
+    def get_retry_after(self, endpoint):
+def rate_limit(f):
+    def decorated_function(*args, **kwargs):
+def generate_csrf_token():
+def csrf_protect():
+def set_csrf_cookie(response):
+def _log_writer_loop():
+def log_request(response):
+def disable_api_response_caching(response):
+def cleanup_logs():
+def _log_portal_exception(context: str, exc: Exception) -> str:
+def _parse_date_any(value):
+def _to_iso_date(value):
+def api_admin_observability():
+        def _parse_ts(value):
+def get_db_connection(local_db_name):
+def _ensure_local_library_schema():
+def get_library_db():
+def get_portal_db():
+def create_table_safe(cursor, table_name, pg_sql, sqlite_sql):
+def init_portal_db():
+def send_email_bg(recipient, subject, body):
+def trigger_notification_email(enrollment_no, subject, body):
+def request_deletion():
+def api_login():
+def api_forgot_password():
+def api_change_password():
+def api_public_register_student():
+def api_update_settings():
+def api_profile_photo():
+def api_loan_history():
+def api_get_notifications():
+    def get_date(item):
+def api_mark_read():
+def api_delete_notification(notif_id):
+def api_admin_notices():
+def api_delete_notice(notice_id):
+def api_logout():
+def api_me():
+def api_user_policies():
+def api_alerts():
+def api_services():
+def api_dashboard():
+def get_book_details(book_id):
+def rate_book(book_id):
+def toggle_wishlist_api(book_id):
+def add_to_waitlist(book_id):
+def remove_from_waitlist(book_id):
+def generate_email_template(header_title, user_name, main_text, details_dict=None, theme='blue', footer_note=None):
+def api_submit_request():
+        def get_title_from_details(details_obj):
+def api_get_requests():
+def api_cancel_request(req_id):
+def api_books():
+def api_admin_all_requests():
+def api_admin_request_history():
+def api_admin_deletion_history():
+def api_admin_approve_request(req_id):
+def api_admin_reject_request(req_id):
+def api_admin_approve_deletion(del_id):
+def api_admin_reject_deletion(del_id):
+def api_admin_reset_password(enrollment_no):
+def api_admin_bulk_password_reset():
+def api_admin_auth_stats():
+def api_admin_stats():
+def api_get_study_materials():
+def allowed_file(filename):
+def api_admin_study_materials():
+def download_study_material(material_id):
+def api_admin_manage_material(material_id):
+def serve(path):
