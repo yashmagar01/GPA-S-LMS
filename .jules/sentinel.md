@@ -1,0 +1,4 @@
+## 2025-02-14 - [Authorization Bypass via Network Exposure]
+**Vulnerability:** The Flask Student Portal lacked access controls for `/api/admin/` endpoints. Waitress serves the app on `0.0.0.0` by default, making these sensitive administrative endpoints exposed to any network user.
+**Learning:** Framework-level middleware and application-level routing must act in tandem. While endpoints were intended for desktop local communication, the network bindings (0.0.0.0) overrode that assumption, requiring explicit authorization checks at the routing layer.
+**Prevention:** Always assume zero-trust networking. Any endpoint designed for local-only traffic must programmatically verify the `request.remote_addr` against localhost IPs ('127.0.0.1', '::1') via an `@app.before_request` hook, rather than relying on network architecture.
