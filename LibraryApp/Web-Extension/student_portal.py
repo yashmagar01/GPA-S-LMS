@@ -465,7 +465,12 @@ class RateLimiter:
     def _get_client_key(self, endpoint):
         """Generate unique key for client + endpoint"""
         # Use IP address as identifier
-        client_ip = request.headers.get('X-Forwarded-For', request.remote_addr) or 'unknown'
+        # Fix IP spoofing: parse X-Forwarded-For securely
+        raw_xff = request.headers.get('X-Forwarded-For')
+        if raw_xff:
+            client_ip = raw_xff.split(',')[0].strip()
+        else:
+            client_ip = request.remote_addr or 'unknown'
         return f"{client_ip}:{endpoint}"
     
     def _cleanup_old_requests(self, key, window_seconds):
