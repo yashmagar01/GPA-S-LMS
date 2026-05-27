@@ -8,6 +8,7 @@ import socket
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 import smtplib
 import threading
 from email.mime.text import MIMEText
@@ -375,6 +376,8 @@ def get_or_create_secret_key():
 
 # Serve React Build
 app = Flask(__name__, static_folder='frontend/dist')
+# Apply ProxyFix to securely handle X-Forwarded-* headers from reverse proxies (like Render/Nginx)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 app.secret_key = get_or_create_secret_key()
 
 # --- Startup diagnostics (visible in Render logs) ---
@@ -464,8 +467,8 @@ class RateLimiter:
     
     def _get_client_key(self, endpoint):
         """Generate unique key for client + endpoint"""
-        # Use IP address as identifier
-        client_ip = request.headers.get('X-Forwarded-For', request.remote_addr) or 'unknown'
+        # Use IP address as identifier. ProxyFix guarantees request.remote_addr is the true client IP.
+        client_ip = request.remote_addr or 'unknown'
         return f"{client_ip}:{endpoint}"
     
     def _cleanup_old_requests(self, key, window_seconds):
