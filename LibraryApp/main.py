@@ -139,13 +139,13 @@ except Exception as e:
 # ---------------------------------------------------------------------------
 APP_VERSION = "v5.0_FINAL"
 FINE_PER_DAY = 5  # monetary units per day late
+import hashlib
 # Fixed loan period (teacher requirement): exactly 7 days between borrow and due date
 LOAN_PERIOD_DAYS = 7
-# Simple password required to perform full data wipe (change as needed)
-CLEAR_WIPE_PASSWORD = "clear123"  # EASY default; change for production use
 # Admin login credentials (required at startup)
-ADMIN_USERNAME = "gpa"
-ADMIN_PASSWORD = "gpa123"
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "gpa")
+# Default hashed admin password (sha256 of "gpa123")
+ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "d84a5a7b330fefd799295540c51d1a01774d7d3c7a57ba9f31b3601ee259f3fc")
 
 class LibraryApp:
     def _sync_runtime_settings_now(self):
@@ -1272,11 +1272,12 @@ class LibraryApp:
         if hasattr(sys, '_MEIPASS'):
             settings_file = os.path.join(os.path.dirname(sys.executable), 'library_settings.json')
         
+        import os
         default_settings = {
             'fine_per_day': 5,
             'loan_period_days': 7,
             'max_books_per_student': 5,
-            'admin_password': 'gpa123'
+            'admin_password_hash': ADMIN_PASSWORD_HASH
         }
         
         if os.path.exists(settings_file):
@@ -2305,9 +2306,25 @@ Government Polytechnic Awasari (Kh)"""
         def do_login():
             username = user_entry.get().strip()
             password = pass_entry.get().strip()
-            stored = self.library_settings.get('admin_password', ADMIN_PASSWORD)
             
-            if username == ADMIN_USERNAME and password == stored:
+            # Check password via hash
+            hashed_input = hashlib.sha256(password.encode()).hexdigest()
+            # Stored is expected to be hash, if not we fallback to ADMIN_PASSWORD_HASH
+            stored_hash = self.library_settings.get('admin_password_hash', ADMIN_PASSWORD_HASH)
+
+            # Legacy migration check: if library_settings still has plaintext 'admin_password',
+            # we should check against that and potentially migrate it (or just compare).
+            # For security, we'll hash the input to check against stored hash.
+            # If the user hasn't changed it via settings, we use the default hash.
+            is_valid_pwd = False
+            if 'admin_password' in self.library_settings:
+                 # It's an old plaintext password in settings json, check directly
+                 if password == self.library_settings['admin_password']:
+                     is_valid_pwd = True
+            elif hashed_input == stored_hash:
+                 is_valid_pwd = True
+
+            if username == ADMIN_USERNAME and is_valid_pwd:
                 # Cleanup and launch main
                 for w in self.root.winfo_children(): w.destroy()
                 self.create_main_interface()
@@ -2694,8 +2711,16 @@ Government Polytechnic Awasari (Kh)"""
         pwd = simpledialog.askstring("Authentication Required", "Enter admin password to promote students:", show='*')
         if pwd is None:
             return
-        stored_password = self.library_settings.get('admin_password', ADMIN_PASSWORD)
-        if pwd.strip() != stored_password:
+
+        hashed_input = hashlib.sha256(pwd.strip().encode()).hexdigest()
+        is_valid_pwd = False
+        if 'admin_password' in self.library_settings:
+            if pwd.strip() == self.library_settings['admin_password']:
+                is_valid_pwd = True
+        elif hashed_input == self.library_settings.get('admin_password_hash', ADMIN_PASSWORD_HASH):
+            is_valid_pwd = True
+
+        if not is_valid_pwd:
             messagebox.showerror("Access Denied", "Incorrect password. Promotion aborted.")
             return
         self.promote_student_years()
@@ -2722,8 +2747,17 @@ Government Polytechnic Awasari (Kh)"""
         if pwd is None:
             messagebox.showinfo("Cancelled", "Data wipe cancelled.")
             return
-        stored_password = self.library_settings.get('admin_password', ADMIN_PASSWORD)
-        if pwd.strip() != stored_password:
+
+        hashed_input = hashlib.sha256(pwd.strip().encode()).hexdigest()
+
+        is_valid_pwd = False
+        if 'admin_password' in self.library_settings:
+            if pwd.strip() == self.library_settings['admin_password']:
+                 is_valid_pwd = True
+        elif hashed_input == self.library_settings.get('admin_password_hash', ADMIN_PASSWORD_HASH):
+            is_valid_pwd = True
+
+        if not is_valid_pwd:
             messagebox.showerror("Incorrect", "Wrong password. Data wipe aborted.")
             return
         # Second, stronger confirmation
@@ -4512,8 +4546,17 @@ Government Polytechnic Awasari (Kh)"""
             
             def do_save():
                 # Verify current password
-                stored_password = self.library_settings.get('admin_password', ADMIN_PASSWORD)
-                if current_entry.get() != stored_password:
+                pwd = current_entry.get()
+                hashed_input = hashlib.sha256(pwd.encode()).hexdigest()
+                is_valid_pwd = False
+
+                if 'admin_password' in self.library_settings:
+                    if pwd == self.library_settings['admin_password']:
+                        is_valid_pwd = True
+                elif hashed_input == self.library_settings.get('admin_password_hash', ADMIN_PASSWORD_HASH):
+                    is_valid_pwd = True
+
+                if not is_valid_pwd:
                     messagebox.showerror("Error", "Current password is incorrect", parent=dialog)
                     return
                 if new_entry.get() != confirm_entry.get():
@@ -4523,8 +4566,12 @@ Government Polytechnic Awasari (Kh)"""
                     messagebox.showerror("Error", "Password must be at least 4 characters", parent=dialog)
                     return
                 
+                # Delete old plaintext password if it existed
+                if 'admin_password' in self.library_settings:
+                    del self.library_settings['admin_password']
+
                 # Save new password
-                self.library_settings['admin_password'] = new_entry.get()
+                self.library_settings['admin_password_hash'] = hashlib.sha256(new_entry.get().encode()).hexdigest()
                 if self.save_library_settings(self.library_settings):
                     messagebox.showinfo("Success", "Password updated successfully!", parent=dialog)
                     dialog.destroy()
