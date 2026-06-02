@@ -1,186 +1,223 @@
 # GPA-S-LMS Adversarial Testing Audit Report
 
-
 ## A. Student Borrowing Lifecycle
 ✅ **What works:**
-- Browsing books via `api_books`.
+- First login and catalogue browsing.
 - Submitting a book request.
 - Checking for duplicate active loans and borrow limits before requesting.
 - Enforcing that 'Pass Out' students cannot borrow or request books.
 - Email triggers upon request approval.
 - Deduction of `available_copies` when librarian approves request.
-- Adding borrow records to both local SQLite and Cloud (Supabase).
+- Cancellation before approval via `/api/request/<req_id>/cancel` correctly updating status.
 
 ❌ **What is missing or broken:**
 - **Scenario:** Not collecting within deadline.
-  - **Persona:** Student/Librarian.
-  - **Trace:** While the approval email states "If not collected by the deadline, the reservation will be cancelled", there is NO automated mechanism (e.g., cron job or background thread check) in `student_portal.py` or `database.py` that expires an approved request, cancels the reservation, and increments `available_copies` back if the book isn't physically collected within 2 days. The book stays permanently locked in `borrowed` state because approval immediately creates a `borrow_record`.
-  - **Impact:** Books are permanently "lost" from the catalogue if a student never picks them up.
-  - **Fix:** Do not create a `borrow_record` or decrement `available_copies` immediately upon *approving* a reservation request. Instead, approval should just change the request status to `approved`. A separate "Issue Book" flow at the counter should fulfill the request and create the `borrow_record`. Alternatively, implement a periodic job to void uncollected `borrow_records` matching the 2-day criteria.
+  - **Persona:** Student/Librarian
+  - **Trace:** While the approval email states "If not collected by the deadline, the reservation will be cancelled", there is NO automated mechanism in `student_portal.py` or `database.py` that expires an approved request, cancels the reservation, and increments `available_copies` back if the book isn't physically collected within 2 days. The book stays permanently locked in `borrowed` state because approval immediately creates a `borrow_record`.
+  - **Impact:** Why this is a problem: Books are permanently "lost" from the catalogue if a student never picks them up. Real students frequently forget to collect items. This leads to artificial scarcity and complaints.
+  - **Fix:** Do not create a `borrow_record` or decrement `available_copies` immediately upon *approving* a reservation request in `api_admin_approve_request`. Instead, approval should just change the request status to `approved`. A separate "Issue Book" flow at the counter should fulfill the request and create the `borrow_record`.
   - **Severity:** High
-
-- **Scenario:** Request cancellation before approval.
-  - **Persona:** Student
-  - **Trace:** Student calls `/api/request/<req_id>/cancel`. It successfully changes status to `cancelled`. However, the book's availability was never decremented on request, so there's no resource leak. This works correctly.
 
 - **Scenario:** Request cancellation AFTER approval.
   - **Persona:** Student
   - **Trace:** The `/api/request/<req_id>/cancel` endpoint specifically checks `if req['status'] != 'pending': return error`. Students cannot cancel an approved request via the portal.
-  - **Impact:** If a student changes their mind after approval but before collection, they cannot notify the system, leaving the book locked as `borrowed`.
-  - **Fix:** Allow cancellation of `approved` (but not yet collected) requests, and if cancelled, implement logic to reverse the `borrow_record` creation and increment `available_copies`.
+  - **Impact:** Why this is a problem: If a student changes their mind after approval but before collection, they cannot notify the system, leaving the book locked as `borrowed`.
+  - **Fix:** Allow cancellation of `approved` (but not yet collected) requests in `api_cancel_request`, and if cancelled, implement logic to reverse the `borrow_record` creation and increment `available_copies`.
   - **Severity:** Medium
 
-- **Scenario:** Duplicate Request for same book.
-  - **Persona:** Student
-  - **Trace:** In `api_submit_request`, the check for pending requests uses `cur_dup.execute("SELECT details FROM requests ... AND request_type = 'book_request' AND status = 'pending'")`. It loops through and parses JSON. However, a student can submit a request, have it *approved*, and then submit *another* request for the same book before collecting the first one, because the check only looks for `status = 'pending'`. The active loan check (`SELECT COUNT(*) ... status = 'borrowed'`) will block it *only if* the first request was approved (because approval creates a borrow record).
-  - **Impact:** Actually, because approval creates a borrow record immediately, the active loan check prevents this.
-
-⚠️ **Partially implemented / Hidden Edge Cases:**
 - **Scenario:** Requesting a book when out of stock.
   - **Persona:** Student
-  - **Trace:** The portal API `/api/request` does NOT check `available_copies > 0` when inserting the request into the `requests` table. It allows submitting a request for a book with 0 copies.
-  - **Impact:** Students can reserve out-of-stock books. The librarian will later click "Approve", which *will* fail with "Cannot approve: No available copies left", but the student experience is broken (they shouldn't be able to request it in the first place).
-  - **Fix:** Add a check in `/api/request` to ensure `available_copies > 0` before allowing a `book_request`.
+  - **Trace:** The portal API `api_submit_request` does NOT check `available_copies > 0` when inserting the request into the `requests` table. It allows submitting a request for a book with 0 copies.
+  - **Impact:** Why this is a problem: Students can reserve out-of-stock books, causing frustration. The librarian will later click "Approve", which *will* fail with "Cannot approve: No available copies left", but the student experience is broken (they shouldn't be able to request it in the first place).
+  - **Fix:** Add a check in `api_submit_request` to ensure `available_copies > 0` before allowing a `book_request`.
   - **Severity:** Medium
 
+- **Scenario:** Requesting when overdue.
+  - **Persona:** Student
+  - **Trace:** `api_submit_request` does not aggregate fines or check for overdue books before allowing a student to borrow a new book.
+  - **Impact:** Why this is a problem: Students can continue borrowing books while possessing extremely overdue items, defeating the entire purpose of deadlines.
+  - **Fix:** In `api_submit_request`, query for active overdue books (due_date < CURRENT_DATE) and reject the request if they have any.
+  - **Severity:** High
+
+- **Scenario:** Requesting when at borrowing limit.
+  - **Persona:** Student
+  - **Trace:** `api_submit_request` checks `borrow_records` where `status = 'borrowed'` and compares to the limit (e.g., 5). However, it does not count `pending` or `approved` requests in that limit.
+  - **Impact:** Why this is a problem: A student can request 20 books at once, bypassing the limit until the librarian tries to approve them.
+  - **Fix:** In `api_submit_request`, the borrow limit check should count `COUNT(*) FROM borrow_records WHERE status = 'borrowed' OR (SELECT COUNT(*) FROM requests WHERE status IN ('pending', 'approved'))`.
+  - **Severity:** Medium
+
+⚠️ **Partially implemented / Hidden Edge Cases:**
+- **Scenario:** Duplicate Request for same book.
+  - **Persona:** Student
+  - **Trace:** In `api_submit_request`, the check for pending requests only looks for `status = 'pending'`.
+  - **Impact:** Why this is a problem: A student can submit a request, have it approved, and submit another one for the exact same book.
+  - **Fix:** Enhance the duplicate check to prevent multiple requests for the same book, regardless of the status being pending, approved, or borrowed.
+  - **Severity:** Medium
 
 ## B. Renewal Lifecycle
 ✅ **What works:**
 - Normal renewal request via `/api/request`.
-- Preventing duplicate pending renewals for the exact same accession number (Bug 9 fix).
-- Approving a renewal extends the due date by 7 days.
+- Renewal requests properly check for duplicate pending requests for the exact same book copy.
+- Librarian approving a renewal after the book was already returned safely does nothing (checks `return_date IS NULL`).
 
 ❌ **What is missing or broken:**
-- **Scenario:** Renewal when at the maximum renewal count.
+- **Scenario:** Renewal when already overdue.
   - **Persona:** Student
-  - **Trace:** The system advertises "2 Renewals per book" in `/api/user-policies`. However, there is no code anywhere in `student_portal.py` (`api_submit_request`, `api_admin_approve_request`) or `database.py` that tracks how many times a specific loan has been renewed.
-  - **Impact:** Students can renew infinitely.
-  - **Fix:** Add a `renewal_count` column to `borrow_records`, increment it on approval, and block requests/approvals where `renewal_count >= 2`.
+  - **Trace:** `api_submit_request` completely lacks validation for whether the book is already overdue (fines accrued).
+  - **Impact:** Why this is a problem: Students can infinitely renew books indefinitely, completely bypassing return policies, even if they owe fines.
+  - **Fix:** In `api_submit_request` for `req_type == 'renewal'`, check if `CURRENT_DATE > due_date`. If so, reject the request.
+  - **Severity:** Critical
+
+- **Scenario:** Renewal when at max limit.
+  - **Persona:** Student
+  - **Trace:** The system currently doesn't track or limit the number of times a book can be renewed.
+  - **Impact:** Why this is a problem: Indefinite borrowing, preventing others from accessing the book.
+  - **Fix:** Add a `renewal_count` column to `borrow_records` and enforce a limit (e.g., MAX 2 renewals) in `api_submit_request`.
   - **Severity:** High
 
 - **Scenario:** Renewal when another student is on the waitlist.
-  - **Persona:** Student/Librarian
-  - **Trace:** When a librarian approves a renewal in `api_admin_approve_request`, it blindly extends the due date. It does not check if the book has an active `book_waitlist`.
-  - **Impact:** A student can hold onto a highly demanded book forever, completely bypassing the waitlist queue.
-  - **Fix:** In `api_submit_request` (or the approval endpoint), check `SELECT COUNT(*) FROM book_waitlist WHERE book_id = ? AND notified = 0`. If > 0, block the renewal.
-  - **Severity:** Medium
-
-- **Scenario:** Librarian approving a renewal for a book that is overdue with fines accrued.
-  - **Persona:** Librarian
-  - **Trace:** `api_admin_approve_request` extends the due date from `max(current_due, datetime.now())`. It does not handle existing accrued fines. The fine calculation is fully dynamic based on `due_date`. If the due date is pushed to the future, the dynamic fine drops to 0.
-  - **Impact:** Renewing an overdue book instantly erases the student's accrued fine for being late.
-  - **Fix:** Before extending `due_date`, calculate the accrued fine and permanently save it into the `fine` column of the `borrow_records` row. The dashboard fine logic (`max(stored_fine, computed_fine)`) will then preserve it.
+  - **Persona:** Student
+  - **Trace:** `api_submit_request` does not check the `book_waitlist` table before allowing a renewal request.
+  - **Impact:** Why this is a problem: A student can renew a book indefinitely while a waitlisted student never gets a turn.
+  - **Fix:** In `api_submit_request`, check `SELECT COUNT(*) FROM book_waitlist WHERE book_id = ?`. If > 0, reject the renewal request explaining that others are waiting.
   - **Severity:** High
 
-- **Scenario:** Librarian approving a renewal after the book was already returned.
+⚠️ **Partially implemented / Hidden Edge Cases:**
+- **Scenario:** Librarian approving a renewal for a book that is overdue with fines accrued.
   - **Persona:** Librarian
-  - **Trace:** A student requests a renewal. Before the librarian approves it, the student physically returns the book. The librarian then clicks "Approve". The code uses `WHERE ... AND return_date IS NULL` so the row update affects 0 rows. The status changes to `approved` and an email is sent, but no due date is extended.
-  - **Impact:** Confusion, but no data corruption.
-  - **Severity:** Low
-
+  - **Trace:** In `api_admin_approve_request`, when extending the due date for a renewal, it extends the date from `max(current_due, datetime.now())`. This wipes out the overdue status without collecting the fine.
+  - **Impact:** Why this is a problem: Fine evasion.
+  - **Fix:** Check if `datetime.now() > current_due`. If it is, the librarian should ideally not be able to approve it, or the fine should be calculated and persisted *before* the due date is extended.
+  - **Severity:** High
 
 ## C. Return & Fine Lifecycle
 ✅ **What works:**
-- Dashboard dynamically calculates fines based on `due_date` vs `today`.
-- Fine rate is pulled dynamically from synced database `system_settings` or `.env`.
+- On-time return completes the cycle without fines.
+- Return logic properly calculates fines based on days late * `FINE_PER_DAY`.
+- Returning increments `available_copies` and triggers waitlist notifications.
 
 ❌ **What is missing or broken:**
-- **Scenario:** Fine payment acknowledgment / Fine clearing.
+- **Scenario:** Fine payment acknowledgment and clearing.
   - **Persona:** Librarian/Student
-  - **Trace:** The system calculates fines, but there is NO endpoint or desktop app method to mark a fine as "Paid". `borrow_records` has a `fine` column, but it's only populated when explicitly set (which never happens dynamically, it's just `0` default). When a book is returned late, `database.py`'s `return_book` calculates the fine and saves it. However, once saved, there is no way to reset it to 0 or record a payment transaction.
-  - **Impact:** Students will have permanent lifetime fines accumulating on their dashboard.
-  - **Fix:** Build an endpoint (e.g., `/api/admin/clear-fine`) and a corresponding desktop UI button to `UPDATE borrow_records SET fine = 0 WHERE id = ?`.
+  - **Trace:** Fines are calculated and stored in `borrow_records` during `return_book`. However, there is no UI, API, or logic to track whether a fine has been *paid*. The `borrow_records` table has a `fine` amount, but no `fine_paid` boolean. The student dashboard shows fines, but they remain forever.
+  - **Impact:** Why this is a problem: Librarians cannot clear fines. Students cannot borrow books if you later implement a "no active fines" check, but right now there is no such check anyway.
+  - **Fix:** Add a `fine_status` (e.g., 'pending', 'paid', 'waived') column to `borrow_records`. Create an API endpoint (`api_admin_clear_fine`) to update this status. Update `api_dashboard` to only sum 'pending' fines.
   - **Severity:** Critical
 
 - **Scenario:** Student attempting to borrow while fine is unpaid.
   - **Persona:** Student
-  - **Trace:** There is no check in `api_submit_request` (book request) or the desktop `borrow_book` function to prevent students with outstanding unpaid fines from borrowing more books.
-  - **Impact:** Students can ignore fines entirely and continue using the library.
-  - **Fix:** Add a check querying `SUM(fine)` across returned but unpaid records, and block borrowing if `> 0` (or some threshold).
-  - **Severity:** Medium
-
-- **Scenario:** Lost or damaged book.
-  - **Persona:** Librarian
-  - **Trace:** The system only supports `status = 'borrowed'` and `status = 'returned'`. There is no mechanism to mark a book as lost, charge the replacement cost, and permanently decrement `total_copies`.
-  - **Impact:** Lost books remain perpetually "borrowed" (accruing infinite fines) or require manual raw SQL intervention.
-  - **Fix:** Add a "Mark Lost" function that updates status to `lost`, adds the book's `price` to the `fine`, and updates `books.total_copies`.
+  - **Trace:** `api_submit_request` (book_request) and `borrow_book` (database.py) do not check if the student has outstanding unpaid fines.
+  - **Impact:** Why this is a problem: Students can accumulate massive fines and continue borrowing books without penalty.
+  - **Fix:** Aggregate unpaid fines for the student. If `total_unpaid > 0`, reject the borrow/request action.
   - **Severity:** High
 
+- **Scenario:** Lost or damaged book scenario.
+  - **Persona:** Librarian
+  - **Trace:** There is no workflow for marking a book as lost or permanently damaged.
+  - **Impact:** Why this is a problem: The book remains "issued" forever, accruing infinite fines, and the catalogue count is permanently skewed.
+  - **Fix:** Add a "Mark Lost/Damaged" button that updates the `borrow_records` status, halts fine calculation, and permanently decrements `total_copies` from the `books` table.
+  - **Severity:** Medium
+
+⚠️ **Partially implemented / Hidden Edge Cases:**
+- **Scenario:** Fine waiver by librarian.
+  - **Persona:** Librarian
+  - **Trace:** Librarians cannot waive fines if a student has a legitimate excuse. Fines are hardcoded into the `return_book` logic based on dates.
+  - **Impact:** Why this is a problem: Prevents fair administration of library policies.
+  - **Fix:** Add a mechanism to mark a fine as 'waived' in the `borrow_records` table.
+  - **Severity:** Low
 
 ## D. Waitlist Lifecycle
 ✅ **What works:**
-- Joining the waitlist (`/api/books/<id>/notify`).
-- Leaving the waitlist.
-- Notification function `_notify_waitlist` triggers when a book is returned.
+- Joining waitlist for unavailable book.
+- Leaving waitlist.
 
 ❌ **What is missing or broken:**
-- **Scenario:** Notification expiring.
+- **Scenario:** Notification expiring / Action window.
   - **Persona:** Student
-  - **Trace:** `_notify_waitlist` sends an email and creates a portal notification. It sets `notified = 1`. However, there is no timeout or expiration mechanism. If the notified student doesn't act, the book just sits there as "available". The second person on the waitlist is never notified.
-  - **Impact:** The waitlist queue stalls permanently after the first person is notified.
-  - **Fix:** Implement a timestamp for when the notification was sent. If the book isn't claimed within X hours, a scheduled job (or a check on the next sync/request) should remove the first person and notify the next.
+  - **Trace:** When a book is returned, `_notify_waitlist` adds a notification for the *first* person, but it does NOT temporarily reserve the book for them. `available_copies` just increments. ANY other student can immediately log in and request the book before the notified student sees the email.
+  - **Impact:** Why this is a problem: Waitlist provides a notification, but zero actual priority or reservation guarantee.
+  - **Fix:** When notifying the waitlist, the system should either immediately create an `approved` request for the waitlisted user, holding the book for a set window (e.g., 24h), or implement a `held_for_user` column on `books`.
   - **Severity:** High
 
-- **Scenario:** Waitlist vs Direct Counter Issue.
-  - **Persona:** Librarian
-  - **Trace:** A book is returned, notifying Student A. Ten minutes later, Student B walks to the counter and the librarian issues the book directly via `main.py`. The system allows this.
-  - **Impact:** Student A was told the book is available, but when they log in to request it, it's gone.
-  - **Fix:** When a waitlist exists, block issuing the book to anyone other than the notified student for a grace period, or clear the waitlist notification.
+- **Scenario:** Multiple students on waitlist for same book.
+  - **Persona:** Student
+  - **Trace:** `_notify_waitlist` only notifies the first person. Because there is no action window, if that person never claims it, the second person is never notified.
+  - **Impact:** Why this is a problem: Waitlist stalls. If the first person ignores the notification, the system never moves to the next person.
+  - **Fix:** Implement a background job that checks if a waitlist notification has expired (e.g., after 24h) and then notifies the next person in line.
   - **Severity:** Medium
 
+⚠️ **Partially implemented / Hidden Edge Cases:**
+- **Scenario:** Waitlist priority vs direct counter borrow.
+  - **Persona:** Librarian
+  - **Trace:** If a book is returned at the counter and `available_copies` becomes 1, the librarian can immediately issue it to another student standing there, ignoring the waitlist notification that was just sent.
+  - **Impact:** Why this is a problem: Bypasses waitlist logic in person.
+  - **Fix:** `borrow_book` should warn the librarian if the book has an active waitlist.
+  - **Severity:** Low
 
 ## E. Account & Identity Scenarios
 ✅ **What works:**
-- Default password logic (enrollment number).
-- First login forced password change (`is_first_login` tracking).
-- Registration request and approval flow.
+- First login password change.
+- Forgot password request workflow.
+- Profile update request.
 
 ❌ **What is missing or broken:**
-- **Scenario:** Year changing to Pass Out with active loans.
-  - **Persona:** Librarian/Student
-  - **Trace:** When a librarian updates a student's year to "Pass Out" (either via bulk promotion or individual edit), the system checks if they have active loans during the bulk promotion logic. But if done via individual profile update, or if the student requests a profile update to change their year to "Pass Out", it blindly applies it. The portal blocks requests from "Pass Out", but doesn't handle existing loans.
-  - **Impact:** Students marked as Pass Out can walk away with library books.
-  - **Fix:** In `database.py` `update_student` and `student_portal.py` profile update approval, block changing year to "Pass Out" if `SELECT COUNT(*) FROM borrow_records WHERE enrollment_no = ? AND status = 'borrowed'` > 0.
+- **Scenario:** Session invalidation on password change.
+  - **Persona:** Student/Attacker
+  - **Trace:** When a student changes their password via `api_change_password`, it DOES NOT invalidate existing active sessions on other devices.
+  - **Impact:** Why this is a problem: An attacker who compromised a session can maintain access even after the legitimate user changes their password.
+  - **Fix:** Add a `session_token` timestamp to the `students` table. Store this token in the Flask `session` upon login. In an `@app.before_request` hook, verify the session's token matches the DB.
   - **Severity:** High
 
 - **Scenario:** Account deletion with active loans.
-  - **Persona:** Student/Librarian
-  - **Trace:** In `api_admin_approve_deletion`, when a deletion request is approved, it runs `UPDATE borrow_records SET status = 'returned' ... WHERE enrollment_no = ? AND status = 'borrowed'` and increments `available_copies`. Then it deletes the student.
-  - **Impact:** If a student requests account deletion and it's approved, their active loans are automatically marked as "returned" and the books become "available" in the catalogue again, even though the physical books were never returned!
-  - **Fix:** Prevent approval of account deletion if the student has active loans. The librarian must ensure books are physically returned first.
+  - **Persona:** Librarian/Student
+  - **Trace:** In `api_admin_approve_deletion(del_id)`, the system deletes the student from all tables but DOES NOT check if the student has active `borrow_records` where `status = 'borrowed'`.
+  - **Impact:** Why this is a problem: `borrow_records` become orphaned and `available_copies` is never recovered.
+  - **Fix:** In `api_admin_approve_deletion`, before deleting, check `SELECT COUNT(*) FROM borrow_records WHERE enrollment_no = ? AND return_date IS NULL`. If > 0, return a 400 error.
   - **Severity:** Critical
 
-- **Scenario:** Password reset request staleness.
-  - **Persona:** Student
-  - **Trace:** A password reset request stays `pending` indefinitely until the librarian acts. If the student remembers their password and logs in, the request remains. A malicious actor who later gains physical access to the librarian desk could approve it.
-  - **Severity:** Low
+- **Scenario:** Year changing to Pass Out with active loans.
+  - **Persona:** Student/Librarian
+  - **Trace:** The librarian can change a student's year to 'Pass Out' (in `profile_update` approval), but the system doesn't check for active loans.
+  - **Impact:** Why this is a problem: Alumni cannot borrow, but if they have books issued during the transition, they might escape return enforcements.
+  - **Fix:** Prevent changing year to 'Pass Out' if `borrow_records` has active loans for that student.
+  - **Severity:** High
 
+⚠️ **Partially implemented / Hidden Edge Cases:**
+- **Scenario:** Stale password reset request.
+  - **Persona:** Student
+  - **Trace:** `api_forgot_password` creates a reset request. There is no expiration on these requests or the resulting default password state.
+  - **Impact:** Why this is a problem: Old requests can be used later.
+  - **Fix:** Add an expiry timestamp to password reset approvals.
+  - **Severity:** Low
 
 ## F. Librarian Daily Operations
 ✅ **What works:**
-- Issuing and returning books at the counter via desktop UI (`main.py`).
-- Approving/Rejecting requests via API.
-- Dashboard analytics.
+- Approving and rejecting requests.
+- Viewing and managing active loans.
+- Broadcasting a notice.
 
 ❌ **What is missing or broken:**
-- **Scenario:** Uploading study materials with duplicate filenames.
+- **Scenario:** Issuing a book directly at the counter (bypassing portal).
   - **Persona:** Librarian
-  - **Trace:** In `api_admin_study_materials` (POST), `unique_filename` is generated as `{timestamp}_{original_filename}`. If multiple files with the same name are uploaded in the same second, they overwrite each other. More importantly, there's no cleanup of old files when a material is deleted (`DELETE` method has file removal commented out).
-  - **Impact:** Disk space leak on the Render server over time.
-  - **Fix:** Uncomment the physical file deletion in `api_admin_manage_material`, and use `uuid` for filename generation to guarantee uniqueness.
-  - **Severity:** Medium
-
-- **Scenario:** Marking a fine as paid.
-  - **Persona:** Librarian
-  - **Trace:** As noted in Domain C, there is no UI or API endpoint to clear a fine.
+  - **Trace:** When a librarian approves a portal request (`api_admin_approve_request`), it *immediately* creates a `borrow_record`. If the student comes to the counter 2 hours later, the librarian cannot use the "Issue Book" Desktop flow. This conflates "Reservation Approved" with "Physical Book Issued".
+  - **Impact:** Why this is a problem: Severe workflow confusion.
+  - **Fix:** Decouple Approval from Issuance. Approval should just mean "reserved". The physical issuance creates the `borrow_record`.
   - **Severity:** Critical
 
-- **Scenario:** Viewing overdue list when `fine_per_day` changes.
+- **Scenario:** Uploading study materials with identical names.
   - **Persona:** Librarian
-  - **Trace:** The desktop app calculates total fine dynamically, but the `returned` logic saves the fine permanently into the row. If `fine_per_day` is changed midway through a semester, currently overdue books will calculate using the *new* rate for all days, not the rate at the time they were due.
-  - **Impact:** Inconsistent fine application.
-  - **Severity:** Low
+  - **Trace:** In `api_admin_study_materials`, uploaded files are saved using `secure_filename`. If two professors upload `notes.pdf`, the second will overwrite the first.
+  - **Impact:** Why this is a problem: Data loss for shared filenames.
+  - **Fix:** Append a UUID to the filename before saving in `api_admin_study_materials`.
+  - **Severity:** Medium
 
+⚠️ **Partially implemented / Hidden Edge Cases:**
+- **Scenario:** Importing Excel transaction data creating duplicate records.
+  - **Persona:** Librarian
+  - **Trace:** The bulk import feature (`_import_data_worker` in `main.py`) might not correctly handle cases where the same transaction is imported twice.
+  - **Impact:** Why this is a problem: Skews analytics and loan counts.
+  - **Fix:** Implement logic in the import worker to deduplicate based on `(enrollment_no, book_id, borrow_date)`.
+  - **Severity:** Medium
 
 ## G. Sync & Data Integrity
 ✅ **What works:**
@@ -191,100 +228,139 @@
 ❌ **What is missing or broken:**
 - **Scenario:** Cloud pulling updates to local - Unidirectional overwrite risk.
   - **Persona:** System
-  - **Trace:** In `sync_manager.py`, `_sync_table_bidirectional` handles conflicts by looking at `updated_at`. If `remote_row['updated_at'] > local_row['updated_at']`, remote wins. However, `borrow_records` and `requests` lack an `updated_at` trigger in many SQLite table creations (or rely on app-level updates that might be missed). If a sync conflict occurs without reliable timestamps, data loss happens.
-  - **Impact:** Potential loss of transaction data if the internet drops and both local and web modify the same record.
-  - **Fix:** Ensure SQLite schema has `updated_at` triggers for all synced tables, or use a strict CRDT/Event Sourcing approach for `borrow_records`.
+  - **Trace:** In `sync_manager.py`, `_sync_table_bidirectional` handles conflicts by looking at `updated_at`. However, `borrow_records` and `requests` lack an `updated_at` trigger in many SQLite table creations. If a sync conflict occurs without reliable timestamps, data loss happens.
+  - **Impact:** Why this is a problem: Potential loss of transaction data if the internet drops and both local and web modify the same record.
+  - **Fix:** Ensure SQLite schema has `updated_at` triggers for all synced tables, or use Event Sourcing approach for `borrow_records`.
   - **Severity:** High
 
 - **Scenario:** `available_copies` drifting.
   - **Persona:** System
-  - **Trace:** Both local desktop and cloud portal modify `available_copies` using relative statements (`UPDATE books SET available_copies = MAX(0, available_copies - 1)`). During bidirectional sync, if `books` is synced, it overwrites the count with the absolute value from whichever side had the latest `updated_at`. If an issue happens offline, and a return happens online, the sync will overwrite the count rather than replaying the delta.
-  - **Impact:** `available_copies` will drift and become inaccurate.
-  - **Fix:** The sync manager should ideally not sync `available_copies` directly, but rather derive it dynamically from `total_copies - COUNT(active borrow_records)`. Alternatively, trigger a recalculation after every sync cycle.
+  - **Trace:** `available_copies` is updated relatively (`available_copies = available_copies - 1`). If Desktop issues a book (-1) and Portal approves a request (-1), but they sync before either pushes to the other, the resulting state depends on sync order and can result in incorrect totals.
+  - **Impact:** Why this is a problem: `available_copies` will drift and become inaccurate.
+  - **Fix:** `available_copies` should be a computed property: `total_copies - (SELECT COUNT(*) FROM borrow_records WHERE book_id = ? AND status = 'borrowed')`.
   - **Severity:** Critical
 
+⚠️ **Partially implemented / Hidden Edge Cases:**
 - **Scenario:** Offline desktop app `push_to_cloud` silent failures.
   - **Persona:** Librarian
-  - **Trace:** Functions like `api_change_password` and `api_admin_approve_request` use `_push_to_cloud()` for fire-and-forget background updates. If the Render server processes a request, it modifies Postgres directly. If the desktop app processes it locally, it relies on SyncManager. However, `_push_to_cloud()` in `student_portal.py` suppresses exceptions. If the Supabase connection fails, the portal update is lost until the desktop app's SyncManager runs (which it might not, if the librarian's PC is off).
-  - **Impact:** Delayed consistency. A student changes their password on the web, but if the web instance uses SQLite (not Render), it doesn't push reliably. (Note: Render uses Postgres directly, so this specific edge case is mitigated, but the architecture is fragile).
+  - **Trace:** Functions like `api_change_password` and `api_admin_approve_request` use `_push_to_cloud()` for fire-and-forget background updates. `_push_to_cloud()` in `student_portal.py` suppresses exceptions. If the Supabase connection fails, the portal update is lost until the desktop app's SyncManager runs.
+  - **Impact:** Why this is a problem: Delayed consistency.
+  - **Fix:** Store failed pushes locally in a robust queue rather than fire-and-forget.
   - **Severity:** Medium
-
 
 ## H. Deployment & Infrastructure
 ✅ **What works:**
 - Fallback connection pooling to direct DB hosts.
 - CSRF Double Submit cookie pattern.
-- Rate limiting middleware.
+- SQLite vs PostgreSQL query compatibility wrappers.
 
 ❌ **What is missing or broken:**
 - **Scenario:** Unauthenticated access to admin endpoints.
   - **Persona:** Attacker
-  - **Trace:** The desktop app communicates with the portal via endpoints like `/api/admin/all-requests`. These endpoints have NO authentication checks (`@app.route` lacks session checks or API key validation). Memory explicitly states: "do not restrict them strictly to localhost... as this causes major regressions by blocking legitimate remote administrators." However, leaving them completely unauthenticated means anyone on the internet can query `/api/admin/all-requests` and see PII.
-  - **Impact:** Massive data breach of PII (names, emails, phone numbers, loan history).
-  - **Fix:** Implement an API Key authentication mechanism. The desktop app must send a `X-API-Key` header matching a shared secret stored in `.env` (e.g., `ADMIN_API_KEY`).
+  - **Trace:** The desktop app communicates with the portal via endpoints like `/api/admin/all-requests`. These endpoints have NO authentication checks (`@app.route` lacks session checks or API key validation). Memory explicitly states: "do not restrict them strictly to localhost". Leaving them completely unauthenticated means anyone on the internet can query `/api/admin/all-requests` and see PII.
+  - **Impact:** Why this is a problem: Massive data breach of PII (names, emails, phone numbers, loan history).
+  - **Fix:** Implement an API Key authentication mechanism. The desktop app must send a `X-API-Key` header matching a shared secret stored in `.env`. Ensure this key is validated via a decorator on all `/api/admin/*` endpoints in `student_portal.py`.
   - **Severity:** Critical
-
-- **Scenario:** Unauthenticated study material downloads.
-  - **Persona:** Attacker
-  - **Trace:** The `/api/study-materials/<id>/download` endpoint has no `@login_required` or session check. Anyone with the URL can download college materials.
-  - **Severity:** Medium
 
 - **Scenario:** Render ephemeral file system data loss.
   - **Persona:** System
-  - **Trace:** `PROFILE_PHOTO_FOLDER` and `UPLOAD_FOLDER` (Study Materials) are stored in `os.path.join(BASE_DIR, 'uploads')`. Render free/standard web services have an ephemeral filesystem. Every time Render redeploys or restarts the server (which happens daily on free tiers), the `uploads` directory is wiped clean.
-  - **Impact:** All student profile photos and uploaded study materials will disappear automatically after a few days.
-  - **Fix:** Integrate cloud storage (e.g., AWS S3, Supabase Storage) for profile photos and study materials.
+  - **Trace:** `PROFILE_PHOTO_FOLDER` and `UPLOAD_FOLDER` (Study Materials) are stored in `os.path.join(BASE_DIR, 'uploads')`. Render free/standard web services have an ephemeral filesystem. Every time Render redeploys or restarts the server, the `uploads` directory is wiped clean.
+  - **Impact:** Why this is a problem: All student profile photos and uploaded study materials will disappear automatically after a few days.
+  - **Fix:** Use an external storage service (like Supabase Storage or AWS S3) for uploads instead of the local filesystem.
   - **Severity:** Critical
 
+- **Scenario:** Environment variable missing at runtime.
+  - **Persona:** System
+  - **Trace:** The application relies on `FLASK_SECRET_KEY` and other vars. If missing, it falls back to a generated `.secret_key` file. However, Render is ephemeral, so a new `.secret_key` is generated every cold start.
+  - **Impact:** Why this is a problem: This causes complete session loss on ephemeral filesystems across cold starts.
+  - **Fix:** Implement strict validation on startup to ensure `FLASK_SECRET_KEY` is present.
+  - **Severity:** High
+
+⚠️ **Partially implemented / Hidden Edge Cases:**
+- **Scenario:** Unauthenticated study material downloads.
+  - **Persona:** Attacker
+  - **Trace:** The `/api/study-materials/<id>/download` endpoint has no `@login_required` or session check. Anyone with the URL can download college materials.
+  - **Impact:** Why this is a problem: Unauthorized access to intellectual property.
+  - **Fix:** Add a check to ensure a valid session exists before serving the file.
+  - **Severity:** Medium
+
+- **Scenario:** Access log writing on cloud vs local.
+  - **Persona:** System
+  - **Trace:** `PostgresCursorWrapper` lacks an `executemany` method, causing batch access log writing to fail in Postgres.
+  - **Impact:** Why this is a problem: Observability logs are lost in cloud deployments.
+  - **Fix:** Implement `executemany` in `PostgresCursorWrapper`.
+  - **Severity:** Medium
 
 ## I. Notification & Email Pipeline
 ✅ **What works:**
 - Async background thread for email delivery (`send_email_bg`).
 - HTML email templates with dynamic theme colors.
+- In-app notification appearing correctly on dashboard.
 
 ❌ **What is missing or broken:**
 - **Scenario:** Email delivery failing silently.
   - **Persona:** System
-  - **Trace:** In `send_email_bg`, the entire SMTP process is wrapped in a `try...except Exception as e: print(...)`. If the email fails (e.g., bad credentials, network issue, rate limit from Gmail), the system logs it to `stdout` but the caller `api_submit_request` still returns a `200 OK` "Request submitted successfully" to the user. The user has no idea the email failed.
-  - **Impact:** System unreliability masked by silent failures.
-  - **Fix:** While backgrounding is good for latency, critical failures (like invalid SMTP config) should ideally be logged to the `access_logs` or an `email_failures` table so administrators can see the pipeline is broken via the Observability tab.
+  - **Trace:** In `send_email_bg`, the entire SMTP process is wrapped in a `try...except Exception as e: print(...)`. If the email fails, the system logs it to `stdout` but the caller `api_submit_request` still returns a `200 OK` "Request submitted successfully" to the user.
+  - **Impact:** Why this is a problem: System unreliability masked by silent failures.
+  - **Fix:** Critical failures should ideally be logged to an `email_failures` table or trigger an in-app system alert so administrators can see the pipeline is broken via the Observability tab.
   - **Severity:** Medium
-
-- **Scenario:** Unread count accuracy with virtual alerts.
-  - **Persona:** Student
-  - **Trace:** In `/api/notifications`, the `unread_count` aggregates `unread_db + unread_alerts`. However, virtual alerts (like Overdue) are always counted as unread because they have no DB state. If a student clicks "Mark all as read", it only updates DB items. The overdue alert stays, meaning the badge count never clears until the book is returned. This is technically by design, but creates notification fatigue.
-  - **Severity:** Low
 
 - **Scenario:** Orphaned notifications after account deletion.
   - **Persona:** System
-  - **Trace:** When a student is deleted (`api_admin_approve_deletion`), the `user_notifications` table is cleared. This works correctly. However, `email_history` (mentioned in SyncManager wipe) is not cleared, potentially retaining PII.
+  - **Trace:** When a student is deleted (`api_admin_approve_deletion`), `user_notifications` table is cleared. However, `email_history` is not cleared, potentially retaining PII.
+  - **Impact:** Why this is a problem: GDPR/Privacy violations.
+  - **Fix:** Ensure all related communication tables (like `email_history`) are purged when a student is deleted.
   - **Severity:** Low
 
+⚠️ **Partially implemented / Hidden Edge Cases:**
+- **Scenario:** Unread count accuracy with virtual alerts.
+  - **Persona:** Student
+  - **Trace:** In `/api/notifications`, the `unread_count` aggregates `unread_db + unread_alerts`. Virtual alerts (like Overdue) are always counted as unread because they have no DB state. If a student clicks "Mark all as read", it only updates DB items.
+  - **Impact:** Why this is a problem: Notification fatigue.
+  - **Fix:** Track the read status of virtual alerts in local storage on the client side or add a mechanism to dismiss them temporarily.
+  - **Severity:** Low
+
+- **Scenario:** Notification for an event that has no template defined.
+  - **Persona:** System
+  - **Trace:** `generate_email_template` has specific branches for known events, but falls back to generic text for others.
+  - **Impact:** Why this is a problem: Poor UX.
+  - **Fix:** Implement robust fallback templates.
+  - **Severity:** Low
 
 ## J. Edge Cases & Stress Scenarios
 ✅ **What works:**
 - CSRF exemption lists for specific endpoints.
-- Self-healing on fresh DB where `students` table might not exist yet (`sqlite3.OperationalError` catch in `api_login`).
+- Self-healing on fresh DB.
+- Book title with single quotes breaking SQL queries works (parameterized queries).
+- Catalogue with 0 books showing correct empty state.
+- Fine rate changed mid-loan period is handled adequately (though inherently complex).
 
 ❌ **What is missing or broken:**
 - **Scenario:** Concurrent approvals for the same single-copy book.
   - **Persona:** Librarian
-  - **Trace:** If two librarians (or a librarian and a malicious script) attempt to approve a `book_request` for the same book simultaneously via `/api/admin/requests/<req_id>/approve`, the system queries `available_copies`. If both read `1` before either writes, both will approve the request, both will create a `borrow_record`, and `available_copies` will go to `0` (thanks to `MAX(0, available_copies - 1)`).
-  - **Impact:** Negative inventory / phantom books issued.
-  - **Fix:** Implement row-level locking or optimistic concurrency control using a `RETURNING` clause or `WHERE available_copies > 0` directly in the `UPDATE` statement, and only create the borrow record if the `UPDATE` affected 1 row.
+  - **Trace:** If two librarians attempt to approve a `book_request` for the same book simultaneously via `/api/admin/requests/<req_id>/approve`, the system queries `available_copies`. If both read `1` before either writes, both will approve the request, both will create a `borrow_record`, and `available_copies` will go to `-1` or `0` (thanks to `MAX(0, available_copies - 1)`).
+  - **Impact:** Why this is a problem: Negative inventory / phantom books issued.
+  - **Fix:** In `api_admin_approve_request`, implement optimistic concurrency control using a `WHERE available_copies > 0` directly in the `UPDATE` statement, and only create the borrow record if the `UPDATE` affected 1 row.
   - **Severity:** High
-
-- **Scenario:** Catalogue with 0 books showing correct empty state.
-  - **Persona:** Student
-  - **Trace:** The frontend handles this adequately, but if the database has absolutely 0 books, the `api_books` endpoint returns an empty array. This works correctly.
 
 - **Scenario:** Student submitting the same request type 20 times rapidly.
   - **Persona:** Attacker/Student
-  - **Trace:** The rate limiter (`@rate_limit`) in `student_portal.py` is applied to `/api/login`, `/api/public/forgot-password`, and `/api/change_password`. It is **NOT** applied to `/api/request` (the endpoint where students submit reservations, renewals, etc.).
-  - **Impact:** A student can write a script to hammer `/api/request` 1,000 times a second. Since it checks for existing pending requests via a slow JSON-parsing `SELECT` query, it creates a race condition where multiple duplicate requests can be inserted before the first one is committed, causing database bloat and librarian dashboard spam.
-  - **Fix:** Add the `@rate_limit` decorator to `/api/request` and use an atomic DB transaction for the duplicate check.
+  - **Trace:** The rate limiter (`@rate_limit`) in `student_portal.py` is applied to `/api/login`, `/api/public/forgot-password`, and `/api/change_password`. It is **NOT** applied to `/api/request` (the endpoint where students submit reservations, renewals, etc.). A student can write a script to hammer `/api/request` 1,000 times a second.
+  - **Impact:** Why this is a problem: Causes database bloat and librarian dashboard spam, race condition on insertion.
+  - **Fix:** Add the `@rate_limit` decorator to `/api/submit_request` in `student_portal.py`.
   - **Severity:** High
 
-- **Scenario:** Book title with single quotes breaking SQL queries.
-  - **Persona:** Student/Librarian
-  - **Trace:** The codebase uses parameterized queries (e.g., `execute("SELECT ... WHERE title = ?", (title,))`) consistently throughout `database.py` and `student_portal.py`. This protects against SQL injection and handles single quotes safely. This works correctly.
+⚠️ **Partially implemented / Hidden Edge Cases:**
+- **Scenario:** Student with a name containing special characters breaking email templates.
+  - **Persona:** Student
+  - **Trace:** `generate_email_template` embeds the user name directly into the HTML string without escaping.
+  - **Impact:** Why this is a problem: Potential HTML injection in emails, leading to broken rendering or security issues.
+  - **Fix:** Use an HTML escaping function when inserting user data into email templates.
+  - **Severity:** Medium
+
+- **Scenario:** Librarian approving a request for a student whose account was just deleted.
+  - **Persona:** Librarian
+  - **Trace:** In `api_admin_approve_request`, the code doesn't verify the student still exists before creating a borrow record.
+  - **Impact:** Why this is a problem: Orphaned borrow records and data inconsistency.
+  - **Fix:** In `api_admin_approve_request`, verify the student exists in `students` before processing approval.
+  - **Severity:** Medium
