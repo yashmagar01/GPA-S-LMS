@@ -348,6 +348,30 @@ def _read_file_size_bytes(file_storage) -> int:
         except Exception:
             return 0
 
+# --- Secure Admin API Key Management ---
+def get_admin_api_key():
+    """Get admin API key from env variable, or read/persist one locally for desktop-to-portal auth"""
+    env_key = os.environ.get('ADMIN_API_KEY')
+    if env_key:
+        return env_key
+
+    key_file = os.path.join(BASE_DIR, '.admin_api_key')
+    if os.path.exists(key_file):
+        with open(key_file, 'r') as f:
+            return f.read().strip()
+
+    import secrets
+    new_key = secrets.token_hex(32)
+    try:
+        with open(key_file, 'w') as f:
+            f.write(new_key)
+        print(f"[Security] Generated new admin API key and saved to {key_file}")
+    except Exception as e:
+        print(f"[Security] Warning: Could not persist admin API key: {e}")
+    return new_key
+
+ADMIN_API_KEY = get_admin_api_key()
+
 # --- Secure Secret Key Management ---
 def get_or_create_secret_key():
     """Get secret key from env variable, or generate and persist one locally"""
@@ -550,18 +574,24 @@ CSRF_EXCLUDED_ENDPOINTS = [
 
 
 @app.before_request
-def csrf_protect():
-    """Validate CSRF token for state-changing requests"""
+def secure_endpoints():
+    """Validate CSRF token for state-changing requests and auth for admin endpoints"""
+
+    # 1. Check admin authentication for /api/admin/ endpoints
+    if request.path.startswith('/api/admin/'):
+        provided_key = request.headers.get('X-Admin-Api-Key')
+        import secrets
+        if not provided_key or not secrets.compare_digest(provided_key, ADMIN_API_KEY):
+            return jsonify({'error': 'Unauthorized admin access'}), 401
+        return # Skip CSRF for authenticated admin endpoints
+
+    # 2. Check CSRF for other state-changing requests
     # Skip for safe methods (GET, HEAD, OPTIONS)
     if request.method in ['GET', 'HEAD', 'OPTIONS']:
         return
     
     # Skip for excluded endpoints
     if request.path in CSRF_EXCLUDED_ENDPOINTS:
-        return
-    
-    # Skip for admin endpoints (desktop app access only)
-    if request.path.startswith('/api/admin/'):
         return
     
     # Skip for static files
