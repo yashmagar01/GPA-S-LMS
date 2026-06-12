@@ -1186,8 +1186,58 @@ class LibraryApp:
         self.portal_thread = None
         self.portal_port = 5001  # Changed to 5001 to avoid conflicts with other apps/previous instances
 
+        # Setup Portal Admin API Key Authentication
+        self._setup_admin_api_auth()
+
         # Launch login interface
         self.create_login_interface()
+
+    def _setup_admin_api_auth(self):
+        """Configure urllib.request to always include the Admin API key for portal admin requests"""
+        import urllib.request
+        import os
+
+        # Try reading from env or Web-Extension/.admin_api_key
+        api_key = os.environ.get('ADMIN_API_KEY')
+        if not api_key:
+            key_file = os.path.join(os.path.dirname(__file__), 'Web-Extension', '.admin_api_key')
+            if os.path.exists(key_file):
+                with open(key_file, 'r') as f:
+                    api_key = f.read().strip()
+            else:
+                # Generate key if it doesn't exist yet to fix initialization order
+                import secrets
+                api_key = secrets.token_hex(32)
+                try:
+                    os.makedirs(os.path.dirname(key_file), exist_ok=True)
+                    with open(key_file, 'w') as f:
+                        f.write(api_key)
+                    print(f"[Security] Generated new admin API key for desktop app at {key_file}")
+                except Exception as e:
+                    print(f"[Security] Warning: Could not persist admin API key in desktop app: {e}")
+
+        if api_key:
+            class AdminApiAuthHandler(urllib.request.BaseHandler):
+                def __init__(self, key):
+                    self.api_key = key
+
+                def _add_auth(self, req):
+                    # Only add key for our local server or explicitly authorized remote admin
+                    # This prevents leaking the key if desktop app ever requests external urls with /api/admin/
+                    if '/api/admin/' in req.full_url and (req.host.startswith('127.0.0.1') or req.host == 'localhost'):
+                        req.add_header('X-Admin-Api-Key', self.api_key)
+                    return req
+
+                def http_request(self, req):
+                    return self._add_auth(req)
+
+                def https_request(self, req):
+                    return self._add_auth(req)
+
+            opener = urllib.request.build_opener(AdminApiAuthHandler(api_key))
+            urllib.request.install_opener(opener)
+        else:
+            print("Warning: Admin API key not found, portal admin requests may fail with 401.")
 
     def setup_styles(self):
         """Configure ttk styles (restored after refactor)."""
