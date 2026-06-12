@@ -1,4 +1,4 @@
-# adversarial Testing Audit Report: GPA-S-LMS
+report_content = """# adversarial Testing Audit Report: GPA-S-LMS
 
 ## A. Student Borrowing Lifecycle
 
@@ -216,3 +216,7 @@
    - **Persona:** System
    - **Trace:** Ensure all search queries (e.g., catalogue search) use parameterized queries (`?` or `%s`) and NOT string concatenation or f-strings.
    - **Fix:** Audit `search_books` or catalogue query generation to guarantee parameterization.
+"""
+
+with open("audit_report.md", "w") as f:
+    f.write(report_content)
