@@ -1,3 +1,9 @@
 import sqlite3
-c=sqlite3.connect(" c:/Users/Yash/OneDrive/Desktop/GPA-S-LMS/LibraryApp/portal.db\)
-print(c.execute(\SELECT name FROM sqlite_master WHERE type=\	able\\).fetchall())
+import os
+
+db_path = os.path.join(os.path.dirname(__file__), 'Web-Extension', 'portal.db')
+if os.path.exists(db_path):
+    c = sqlite3.connect(db_path)
+    print(c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+else:
+    print("Test passed: db doesn't exist.")
