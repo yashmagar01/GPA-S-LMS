@@ -26,6 +26,33 @@ from datetime import datetime, timedelta
 import sqlite3
 import os
 import sys
+
+import urllib.request
+class AdminApiAuthHandler(urllib.request.BaseHandler):
+    def _get_api_key(self):
+        api_key = os.environ.get('ADMIN_API_KEY')
+        if not api_key:
+            if getattr(sys, 'frozen', False):
+                base_dir = os.path.join(os.path.dirname(sys.executable), 'Web-Extension')
+            else:
+                base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Web-Extension')
+            key_file = os.path.join(base_dir, '.admin_api_key')
+            if os.path.exists(key_file):
+                with open(key_file, 'r') as f:
+                    api_key = f.read().strip()
+        return api_key
+
+    def http_request(self, req):
+        if req.host.startswith('127.0.0.1') or req.host.startswith('localhost'):
+            api_key = self._get_api_key()
+            if api_key:
+                req.add_unredirected_header('X-Admin-Api-Key', api_key)
+        return req
+
+    https_request = http_request
+
+urllib.request.install_opener(urllib.request.build_opener(AdminApiAuthHandler()))
+
 from tkinter import font
 import webbrowser
 import subprocess

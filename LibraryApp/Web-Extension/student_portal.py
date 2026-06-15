@@ -377,6 +377,39 @@ def get_or_create_secret_key():
 app = Flask(__name__, static_folder='frontend/dist')
 app.secret_key = get_or_create_secret_key()
 
+def get_or_create_admin_api_key():
+    """Get admin API key from env variable, or generate and persist one locally"""
+    env_key = os.environ.get('ADMIN_API_KEY')
+    if env_key:
+        return env_key
+
+    key_file = os.path.join(BASE_DIR, '.admin_api_key')
+    if os.path.exists(key_file):
+        with open(key_file, 'r') as f:
+            return f.read().strip()
+
+    import secrets
+    new_key = secrets.token_hex(32)
+    try:
+        with open(key_file, 'w') as f:
+            f.write(new_key)
+        print(f"[Security] Generated new admin API key and saved to {key_file}")
+    except Exception as e:
+        print(f"[Security] Warning: Could not persist admin API key: {e}")
+    return new_key
+
+ADMIN_API_KEY = get_or_create_admin_api_key()
+
+@app.before_request
+def require_admin_api_key():
+    """Require X-Admin-Api-Key for all /api/admin/ endpoints."""
+    if request.path.startswith('/api/admin/'):
+        provided_key = request.headers.get('X-Admin-Api-Key')
+        import secrets
+        if not provided_key or not secrets.compare_digest(provided_key, ADMIN_API_KEY):
+            return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
+
+
 # --- Startup diagnostics (visible in Render logs) ---
 print(f"[STARTUP] DATABASE_URL set: {bool(os.getenv('DATABASE_URL'))}")
 print(f"[STARTUP] POSTGRES_AVAILABLE (psycopg2 imported): {POSTGRES_AVAILABLE}")
